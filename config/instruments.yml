@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Tradeable instruments for the FIX Exchange Simulator
+# ─────────────────────────────────────────────────────────────────────────────
+# Fields:
+#   symbol      – FIX tag 55 value (required, must be unique)
+#   description – human-readable name
+#   lotSize     – minimum order increment (default: 1)
+#   tickSize    – minimum price increment (default: "0.01")
+# ─────────────────────────────────────────────────────────────────────────────
+
+instruments:
+  - symbol: AAPL
+    description: "Apple Inc."
+    lotSize: 1
+    tickSize: "0.01"
+
+  - symbol: MSFT
+    description: "Microsoft Corporation"
+    lotSize: 1
+    tickSize: "0.01"
+
+  - symbol: GOOGL
+    description: "Alphabet Inc."
+    lotSize: 1
+    tickSize: "0.01"
+
+  - symbol: AMZN
+    description: "Amazon.com Inc."
+    lotSize: 1
+    tickSize: "0.01"
+
+  - symbol: TSLA
+    description: "Tesla Inc."
+    lotSize: 1
+    tickSize: "0.01"
+
+  - symbol: NVDA
+    description: "NVIDIA Corporation"
+    lotSize: 1
+    tickSize: "0.01"
+
+  - symbol: META
+    description: "Meta Platforms Inc."
+    lotSize: 1
+    tickSize: "0.01"
+
+  - symbol: SPY
+    description: "SPDR S&P 500 ETF Trust"
+    lotSize: 1
+    tickSize: "0.01"

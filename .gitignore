@@ -1,0 +1,14 @@
+# Maven build output
+target/
+
+# FIX session state (sequence numbers + message logs)
+store/
+logs/
+
+# IDE / OS
+.idea/
+*.iml
+.DS_Store
+
+# Local config overrides (keep config/ tracked but allow local copies)
+config/*.local.*

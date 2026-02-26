@@ -1,0 +1,17 @@
+# Build outputs (built inside Docker multi-stage, not needed in context)
+target/
+
+# IDE / OS
+.git/
+.gitignore
+.idea/
+*.iml
+.DS_Store
+
+# FIX session state (runtime data, not part of image)
+store/
+logs/
+
+# Docs
+*.md
+FIX_SPEC.md
