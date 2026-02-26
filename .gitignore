@@ -1,5 +1,6 @@
 # Maven build output
 target/
+dependency-reduced-pom.xml
 
 # FIX session state (sequence numbers + message logs)
 store/
