@@ -1,5 +1,7 @@
 package com.fix.simulator.handler;
 
+import com.fix.simulator.admin.InstrumentStateManager;
+import com.fix.simulator.admin.InstrumentStatus;
 import com.fix.simulator.engine.*;
 import com.fix.simulator.util.ExecReportHelper;
 import com.fix.simulator.util.InstrumentRegistry;
@@ -28,6 +30,13 @@ public class NewOrderHandler {
     private final InstrumentRegistry  registry;
     private final ResponseSender      sender;
 
+    /** Optional – injected after construction; null means no state enforcement. */
+    private InstrumentStateManager stateManager;
+
+    public void setStateManager(InstrumentStateManager stateManager) {
+        this.stateManager = stateManager;
+    }
+
     public NewOrderHandler(MatchingEngine engine, InstrumentRegistry registry,
                            ResponseSender sender) {
         this.engine   = engine;
@@ -49,6 +58,21 @@ public class NewOrderHandler {
                 sender.sendReject(sessionId, clOrdId, null,
                         "Unknown symbol: " + symbol, OrdRejReason.UNKNOWN_SYMBOL);
                 return;
+            }
+
+            // Instrument state check (HALT or QUOTES_ONLY blocks new orders)
+            if (stateManager != null) {
+                InstrumentStatus instrStatus = stateManager.getState(symbol);
+                if (instrStatus == InstrumentStatus.HALT) {
+                    sender.sendReject(sessionId, clOrdId, null,
+                            "Trading halted for " + symbol, OrdRejReason.EXCHANGE_CLOSED);
+                    return;
+                }
+                if (instrStatus == InstrumentStatus.QUOTES_ONLY) {
+                    sender.sendReject(sessionId, clOrdId, null,
+                            symbol + " is in QUOTES_ONLY mode", OrdRejReason.EXCHANGE_CLOSED);
+                    return;
+                }
             }
 
             OrderSide   side = parseSide(sideCh);

@@ -1,5 +1,7 @@
 package com.fix.simulator.handler;
 
+import com.fix.simulator.admin.InstrumentStateManager;
+import com.fix.simulator.admin.InstrumentStatus;
 import com.fix.simulator.engine.Execution;
 import com.fix.simulator.engine.MatchingEngine;
 import com.fix.simulator.util.ExecReportHelper;
@@ -32,6 +34,13 @@ public class QuoteHandler {
     private final InstrumentRegistry registry;
     private final ResponseSender     sender;
 
+    /** Optional – injected after construction; null means no state enforcement. */
+    private InstrumentStateManager stateManager;
+
+    public void setStateManager(InstrumentStateManager stateManager) {
+        this.stateManager = stateManager;
+    }
+
     public QuoteHandler(MatchingEngine engine, InstrumentRegistry registry,
                         ResponseSender sender) {
         this.engine   = engine;
@@ -50,6 +59,13 @@ public class QuoteHandler {
 
             if (symbol == null || !registry.isKnown(symbol)) {
                 log.warn("[{}] Quote rejected – unknown symbol {}", sessionId, symbol);
+                sendQuoteAck(sessionId, quoteId, QuoteStatus.REJECTED);
+                return;
+            }
+
+            // HALT blocks quotes
+            if (stateManager != null && stateManager.getState(symbol) == InstrumentStatus.HALT) {
+                log.warn("[{}] Quote rejected – {} is HALTed", sessionId, symbol);
                 sendQuoteAck(sessionId, quoteId, QuoteStatus.REJECTED);
                 return;
             }
@@ -100,6 +116,12 @@ public class QuoteHandler {
                     String symbol = entGrp.isSetSymbol() ? entGrp.getSymbol().getValue() : null;
                     if (symbol == null || !registry.isKnown(symbol)) {
                         log.warn("[{}] MassQuote entry rejected – unknown symbol {}", sessionId, symbol);
+                        rejected++;
+                        continue;
+                    }
+                    // HALT check
+                    if (stateManager != null && stateManager.getState(symbol) == InstrumentStatus.HALT) {
+                        log.warn("[{}] MassQuote entry rejected – {} is HALTed", sessionId, symbol);
                         rejected++;
                         continue;
                     }

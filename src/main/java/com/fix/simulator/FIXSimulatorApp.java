@@ -1,5 +1,9 @@
 package com.fix.simulator;
 
+import com.fix.simulator.admin.ClientRegistry;
+import com.fix.simulator.admin.EventBus;
+import com.fix.simulator.admin.FIXMessageLog;
+import com.fix.simulator.admin.InstrumentStateManager;
 import com.fix.simulator.engine.MatchingEngine;
 import com.fix.simulator.handler.*;
 import com.fix.simulator.util.ExecReportHelper;
@@ -41,6 +45,34 @@ public class FIXSimulatorApp implements Application {
     private final CancelReplaceHandler   cancelReplaceHandler;
     private final QuoteHandler           quoteHandler;
 
+    // ── Admin (optional – injected via setters; null until wired) ────────────
+    private ClientRegistry         clientRegistry;
+    private EventBus               eventBus;    private FIXMessageLog          messageLog;
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Wire in the admin subsystems.
+     * Called from {@code Main} after construction so that existing test code
+     * that uses the two-arg constructor remains unmodified.
+     */
+    public void setClientRegistry(ClientRegistry clientRegistry) {
+        this.clientRegistry = clientRegistry;
+    }
+
+    public void setEventBus(EventBus eventBus) {
+        this.eventBus = eventBus;
+    }
+
+    public void setMessageLog(FIXMessageLog messageLog) {
+        this.messageLog = messageLog;
+    }
+
+    /** Delegates to the handlers' own setters. */
+    public void setInstrumentStateManager(InstrumentStateManager stateManager) {
+        newOrderHandler.setStateManager(stateManager);
+        quoteHandler.setStateManager(stateManager);
+    }
+
     public FIXSimulatorApp(MatchingEngine engine, InstrumentRegistry registry) {
         this.engine   = engine;
         this.registry = registry;
@@ -72,11 +104,23 @@ public class FIXSimulatorApp implements Application {
     @Override
     public void onLogon(SessionID sessionId) {
         log.info("Logon:  {} (compId={})", sessionId, sessionId.getSenderCompID());
+        if (clientRegistry != null) clientRegistry.onConnect(sessionId);
+        if (eventBus != null)
+            eventBus.publish(java.util.Map.of(
+                    "type", "session_connect",
+                    "compId", sessionId.getSenderCompID(),
+                    "sessionId", sessionId.toString()));
     }
 
     @Override
     public void onLogout(SessionID sessionId) {
         log.info("Logout: {}", sessionId);
+        if (clientRegistry != null) clientRegistry.onDisconnect(sessionId);
+        if (eventBus != null)
+            eventBus.publish(java.util.Map.of(
+                    "type", "session_disconnect",
+                    "compId", sessionId.getSenderCompID(),
+                    "sessionId", sessionId.toString()));
     }
 
     @Override
@@ -87,14 +131,30 @@ public class FIXSimulatorApp implements Application {
     @Override
     public void fromAdmin(Message message, SessionID sessionId)
             throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, RejectLogon {
-        // No-op: admin messages handled by QFJ
+        // Block denied clients at Logon time
+        try {
+            String msgType = message.getHeader().getString(quickfix.field.MsgType.FIELD);
+            if (quickfix.field.MsgType.LOGON.equals(msgType) && clientRegistry != null) {
+                String compId = sessionId.getSenderCompID();
+                if (!clientRegistry.isAllowed(compId)) {
+                    log.warn("Rejecting logon from blocked/unlisted compId: {}", compId);
+                    throw new RejectLogon("Access denied for compId: " + compId);
+                }
+            }
+        } catch (RejectLogon rl) {
+            throw rl;
+        } catch (Exception ignored) {
+            // Non-logon admin messages: pass through
+        }
     }
 
     @Override
     public void toApp(Message message, SessionID sessionId) throws DoNotSend {
-        // Optional: log outbound
         if (log.isTraceEnabled())
             log.trace("OUT [{}]: {}", sessionId.getSenderCompID(), message);
+        if (messageLog != null)
+            messageLog.record(sessionId.toString(), sessionId.getTargetCompID(),
+                              FIXMessageLog.Direction.OUT, message);
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -107,6 +167,10 @@ public class FIXSimulatorApp implements Application {
 
         if (log.isDebugEnabled())
             log.debug("IN  [{}]: {}", sessionId.getSenderCompID(), message.getHeader().getString(MsgType.FIELD));
+
+        if (messageLog != null)
+            messageLog.record(sessionId.toString(), sessionId.getTargetCompID(),
+                              FIXMessageLog.Direction.IN, message);
 
         crack(message, sessionId);
     }

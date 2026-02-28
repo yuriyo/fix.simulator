@@ -1,5 +1,10 @@
 package com.fix.simulator;
 
+import com.fix.simulator.admin.AdminServer;
+import com.fix.simulator.admin.ClientRegistry;
+import com.fix.simulator.admin.EventBus;
+import com.fix.simulator.admin.FIXMessageLog;
+import com.fix.simulator.admin.InstrumentStateManager;
 import com.fix.simulator.engine.MatchingEngine;
 import com.fix.simulator.util.InstrumentRegistry;
 import org.slf4j.Logger;
@@ -42,6 +47,13 @@ public class Main {
         MatchingEngine engine = new MatchingEngine();
         registry.symbols().forEach(engine::registerSymbol);
 
+        // ── Admin subsystems ────────────────────────────────────────────────
+        EventBus               eventBus     = new EventBus();
+        InstrumentStateManager stateManager = new InstrumentStateManager();
+        ClientRegistry         clientReg    = new ClientRegistry("config/blocked-clients.yml");
+        engine.setEventBus(eventBus);
+        engine.setStateManager(stateManager);
+
         // ── Load QuickFIX/J settings ────────────────────────────────────────
         SessionSettings settings;
         try (InputStream in = new FileInputStream(cfgPath)) {
@@ -49,6 +61,11 @@ public class Main {
         }
 
         FIXSimulatorApp app        = new FIXSimulatorApp(engine, registry);
+        FIXMessageLog   msgLog     = new FIXMessageLog();
+        app.setClientRegistry(clientReg);
+        app.setEventBus(eventBus);
+        app.setInstrumentStateManager(stateManager);
+        app.setMessageLog(msgLog);
         MessageStoreFactory store  = new FileStoreFactory(settings);
         LogFactory logFactory      = new FileLogFactory(settings);
         MessageFactory msgFactory  = new DefaultMessageFactory();
@@ -60,6 +77,10 @@ public class Main {
         // ── Start ────────────────────────────────────────────────────────────
         acceptor.start();
 
+        int adminPort = Integer.parseInt(System.getProperty("admin.port", "8080"));
+        AdminServer adminServer = new AdminServer(engine, stateManager, clientReg, eventBus, msgLog, adminPort);
+        adminServer.start();
+
         int port = getPort(settings);
         log.info("FIX Simulator started on port {} with {} symbols",
                 port, registry.symbols().size());
@@ -67,8 +88,10 @@ public class Main {
 
         // ── Shutdown hook ─────────────────────────────────────────────────────
         final ThreadedSocketAcceptor finalAcceptor = acceptor;
+        final AdminServer finalAdmin = adminServer;
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             log.info("Shutting down FIX Simulator...");
+            finalAdmin.stop();
             finalAcceptor.stop(true);
         }));
 

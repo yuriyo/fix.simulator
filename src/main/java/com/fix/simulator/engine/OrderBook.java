@@ -195,6 +195,51 @@ public class OrderBook {
     }
 
     // ──────────────────────────────────────────────────────────────────────
+    //  Admin / monitoring helpers
+    // ──────────────────────────────────────────────────────────────────────
+
+    /** All resting limit orders (both sides) plus pending stop orders. */
+    public synchronized List<Order> getActiveOrders() {
+        List<Order> result = new ArrayList<>();
+        for (ArrayDeque<Order> q : bids.values())  result.addAll(q);
+        for (ArrayDeque<Order> q : asks.values())  result.addAll(q);
+        result.addAll(pendingStops);
+        return result;
+    }
+
+    /**
+     * Aggregated bid price levels, best-first, up to {@code depth} levels.
+     * Each entry: {@code {"price": "...", "qty": N, "orders": N}}.
+     */
+    public synchronized List<Map<String, Object>> getBidLevels(int depth) {
+        return aggregateLevels(bids, depth);
+    }
+
+    /**
+     * Aggregated ask price levels, best-first (lowest ask first), up to {@code depth} levels.
+     * Each entry: {@code {"price": "...", "qty": N, "orders": N}}.
+     */
+    public synchronized List<Map<String, Object>> getAskLevels(int depth) {
+        return aggregateLevels(asks, depth);
+    }
+
+    private List<Map<String, Object>> aggregateLevels(
+            TreeMap<BigDecimal, ArrayDeque<Order>> side, int depth) {
+        List<Map<String, Object>> levels = new ArrayList<>();
+        for (Map.Entry<BigDecimal, ArrayDeque<Order>> entry : side.entrySet()) {
+            if (levels.size() >= depth) break;
+            long totalQty = 0;
+            for (Order o : entry.getValue()) totalQty += o.getOpenQty();
+            Map<String, Object> level = new LinkedHashMap<>();
+            level.put("price",  entry.getKey().toPlainString());
+            level.put("qty",    totalQty);
+            level.put("orders", entry.getValue().size());
+            levels.add(level);
+        }
+        return levels;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
     //  Private helpers
     // ──────────────────────────────────────────────────────────────────────
 
