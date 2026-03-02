@@ -13,9 +13,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import quickfix.SessionID;
 import quickfix.field.*;
-import quickfix.fix44.ExecutionReport;
-import quickfix.fix44.OrderCancelReject;
-import quickfix.fix44.OrderCancelReplaceRequest;
+import quickfix.fix42.ExecutionReport;
+import quickfix.fix42.OrderCancelReject;
+import quickfix.fix42.OrderCancelReplaceRequest;
 
 import java.math.BigDecimal;
 import java.util.Collections;
@@ -39,7 +39,7 @@ class CancelReplaceHandlerTest {
     @BeforeEach
     void setUp() {
         handler   = new CancelReplaceHandler(engine, registry, sender);
-        sessionId = new SessionID("FIX.4.4", "CLIENT", "EXCHANGE");
+        sessionId = new SessionID("FIX.4.2", "CLIENT", "EXCHANGE");
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

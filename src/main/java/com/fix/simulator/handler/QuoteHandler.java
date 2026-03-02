@@ -10,11 +10,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import quickfix.SessionID;
 import quickfix.field.*;
-import quickfix.field.QuoteStatus;
-import quickfix.fix44.MassQuote;
-import quickfix.fix44.MassQuoteAcknowledgement;
-import quickfix.fix44.Quote;
-import quickfix.fix44.QuoteStatusReport;
+import quickfix.fix42.MassQuote;
+import quickfix.fix42.Quote;
+import quickfix.fix42.QuoteAcknowledgement;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -157,8 +155,9 @@ public class QuoteHandler {
 
     private void sendQuoteAck(SessionID sessionId, String quoteId, int status) {
         try {
-            QuoteStatusReport ack = new QuoteStatusReport();
-            ack.set(new QuoteStatus(status));
+            // FIX 4.2 uses QuoteAcknowledgement (b) with QuoteAckStatus (tag 297)
+            QuoteAcknowledgement ack = new QuoteAcknowledgement();
+            ack.set(new QuoteAckStatus(status));
             ack.set(new QuoteID(quoteId));
             sender.send(sessionId, ack);
         } catch (Exception e) {
@@ -168,7 +167,8 @@ public class QuoteHandler {
 
     private void sendMassQuoteAck(SessionID sessionId, String massQuoteId, int status) {
         try {
-            MassQuoteAcknowledgement ack = new MassQuoteAcknowledgement(new QuoteStatus(status));
+            QuoteAcknowledgement ack = new QuoteAcknowledgement();
+            ack.set(new QuoteAckStatus(status));
             ack.set(new QuoteID(massQuoteId));
             sender.send(sessionId, ack);
         } catch (Exception e) {

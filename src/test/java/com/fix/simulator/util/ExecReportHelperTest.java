@@ -7,8 +7,8 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import quickfix.FieldNotFound;
 import quickfix.field.*;
-import quickfix.fix44.ExecutionReport;
-import quickfix.fix44.OrderCancelReject;
+import quickfix.fix42.ExecutionReport;
+import quickfix.fix42.OrderCancelReject;
 
 import java.math.BigDecimal;
 
@@ -71,7 +71,7 @@ class ExecReportHelperTest {
 
             assertEquals(ExecType.FILL,            rpt.getExecType().getValue());
             assertEquals(OrdStatus.FILLED,         rpt.getOrdStatus().getValue());
-            assertEquals(100.0,                    rpt.getLastQty().getValue(), 1e-9);
+            assertEquals(100.0,                    rpt.getLastShares().getValue(), 1e-9);
             assertEquals(99.50,                    rpt.getLastPx().getValue(), 1e-9);
             assertEquals(100.0,                    rpt.getCumQty().getValue(), 1e-9);
             assertEquals(0.0,                      rpt.getLeavesQty().getValue(), 1e-9);
@@ -99,7 +99,7 @@ class ExecReportHelperTest {
             ExecutionReport rpt = ExecReportHelper.build(e);
             assertEquals(ExecType.CANCELED,  rpt.getExecType().getValue());
             assertEquals(OrdStatus.CANCELED, rpt.getOrdStatus().getValue());
-            assertFalse(rpt.isSetLastQty());
+            assertFalse(rpt.isSetLastShares());
         }
 
         @Test

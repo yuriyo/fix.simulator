@@ -12,11 +12,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import quickfix.*;
 import quickfix.field.MsgType;
-import quickfix.fix44.MassQuote;
-import quickfix.fix44.NewOrderSingle;
-import quickfix.fix44.OrderCancelReplaceRequest;
-import quickfix.fix44.OrderCancelRequest;
-import quickfix.fix44.Quote;
+import quickfix.fix42.MassQuote;
+import quickfix.fix42.NewOrderSingle;
+import quickfix.fix42.OrderCancelReplaceRequest;
+import quickfix.fix42.OrderCancelRequest;
+import quickfix.fix42.Quote;
 
 /**
  * QuickFIX/J {@link Application} implementation.

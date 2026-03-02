@@ -14,10 +14,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import quickfix.Message;
 import quickfix.SessionID;
 import quickfix.field.*;
-import quickfix.fix44.ExecutionReport;
-import quickfix.fix44.MassQuote;
-import quickfix.fix44.Quote;
-import quickfix.fix44.QuoteStatusReport;
+import quickfix.fix42.ExecutionReport;
+import quickfix.fix42.MassQuote;
+import quickfix.fix42.Quote;
+import quickfix.fix42.QuoteAcknowledgement;
 
 import java.math.BigDecimal;
 import java.util.Collections;
@@ -41,7 +41,7 @@ class QuoteHandlerTest {
     @BeforeEach
     void setUp() {
         handler   = new QuoteHandler(engine, registry, sender);
-        sessionId = new SessionID("FIX.4.4", "MM", "EXCHANGE");
+        sessionId = new SessionID("FIX.4.2", "MM", "EXCHANGE");
     }
 
     // ── Quote (35=S) helpers ──────────────────────────────────────────────────
@@ -73,7 +73,7 @@ class QuoteHandlerTest {
 
             handler.handleQuote(buildQuote("Q1", "AAPL", 99.0, 100.0, 101.0, 100.0), sessionId);
 
-            verify(sender).send(eq(sessionId), any(QuoteStatusReport.class));
+            verify(sender).send(eq(sessionId), any(QuoteAcknowledgement.class));
             // verify no exec reports sent (no fills)
             verify(sender, never()).send(eq(sessionId), any(ExecutionReport.class));
         }
@@ -84,7 +84,7 @@ class QuoteHandlerTest {
 
             handler.handleQuote(buildQuote("Q1", "ZZZZ", 99.0, 100.0, 101.0, 100.0), sessionId);
 
-            verify(sender).send(eq(sessionId), any(QuoteStatusReport.class));
+            verify(sender).send(eq(sessionId), any(QuoteAcknowledgement.class));
             verify(engine, never()).onQuote(any(), any(), any(), anyLong(), any(), anyLong(), any());
         }
 
@@ -103,7 +103,7 @@ class QuoteHandlerTest {
             handler.handleQuote(buildQuote("Q1", "AAPL", 99.0, 50.0, null, 0.0), sessionId);
 
             // quoteAck + 1 execReport
-            verify(sender).send(eq(sessionId), any(QuoteStatusReport.class));
+            verify(sender).send(eq(sessionId), any(QuoteAcknowledgement.class));
             verify(sender).send(eq(sessionId), any(ExecutionReport.class));
         }
 

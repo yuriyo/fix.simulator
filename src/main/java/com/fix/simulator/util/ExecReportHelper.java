@@ -3,8 +3,8 @@ package com.fix.simulator.util;
 import com.fix.simulator.engine.*;
 import quickfix.SessionID;
 import quickfix.field.*;
-import quickfix.fix44.ExecutionReport;
-import quickfix.fix44.OrderCancelReject;
+import quickfix.fix42.ExecutionReport;
+import quickfix.fix42.OrderCancelReject;
 
 import java.math.BigDecimal;
 
@@ -48,9 +48,9 @@ public class ExecReportHelper {
         if (order.getStopPrice() != null)
             rpt.set(new StopPx(order.getStopPrice().doubleValue()));
 
-        // Fill-specific fields
+        // Fill-specific fields (FIX 4.2 uses LastShares, tag 32)
         if (exec.getQty() > 0) {
-            rpt.set(new LastQty(exec.getQty()));
+            rpt.set(new LastShares(exec.getQty()));
             rpt.set(new LastPx(exec.getPrice() != null ? exec.getPrice().doubleValue() : 0));
         }
 

@@ -14,8 +14,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import quickfix.Message;
 import quickfix.SessionID;
 import quickfix.field.*;
-import quickfix.fix44.ExecutionReport;
-import quickfix.fix44.NewOrderSingle;
+import quickfix.fix42.ExecutionReport;
+import quickfix.fix42.NewOrderSingle;
 
 import java.math.BigDecimal;
 import java.util.Collections;
@@ -39,7 +39,7 @@ class NewOrderHandlerTest {
     @BeforeEach
     void setUp() {
         handler   = new NewOrderHandler(engine, registry, sender);
-        sessionId = new SessionID("FIX.4.4", "CLIENT", "EXCHANGE");
+        sessionId = new SessionID("FIX.4.2", "CLIENT", "EXCHANGE");
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

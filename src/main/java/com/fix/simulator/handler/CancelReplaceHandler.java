@@ -11,7 +11,7 @@ import quickfix.field.OrdType;
 import quickfix.field.Price;
 import quickfix.field.Side;
 import quickfix.field.StopPx;
-import quickfix.fix44.OrderCancelReplaceRequest;
+import quickfix.fix42.OrderCancelReplaceRequest;
 
 import java.math.BigDecimal;
 import java.util.List;

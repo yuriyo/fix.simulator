@@ -13,8 +13,8 @@ import quickfix.field.OrdType;
 import quickfix.field.Price;
 import quickfix.field.Side;
 import quickfix.field.StopPx;
-import quickfix.fix44.ExecutionReport;
-import quickfix.fix44.NewOrderSingle;
+import quickfix.fix42.ExecutionReport;
+import quickfix.fix42.NewOrderSingle;
 
 import java.math.BigDecimal;
 import java.util.List;
