@@ -9,7 +9,7 @@ import quickfix.fix42.OrderCancelReject;
 import java.math.BigDecimal;
 
 /**
- * Converts internal {@link Execution} records to QuickFIX/J FIX 4.4 messages.
+ * Converts internal {@link Execution} records to QuickFIX/J FIX 4.2 messages.
  */
 public class ExecReportHelper {
 
@@ -28,6 +28,7 @@ public class ExecReportHelper {
         // Required fields
         rpt.set(new OrderID(String.valueOf(order.getInternalId())));
         rpt.set(new ExecID(exec.getExecId()));
+        rpt.set(new ExecTransType(ExecTransType.NEW)); // required in FIX 4.2 (tag 20)
         rpt.set(new ExecType(toFIXExecType(exec.getExecType())));
         rpt.set(new OrdStatus(toFIXOrdStatus(order.getStatus())));
         rpt.set(new Symbol(order.getSymbol()));

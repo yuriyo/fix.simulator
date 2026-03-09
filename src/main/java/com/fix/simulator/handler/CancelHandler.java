@@ -11,7 +11,7 @@ import quickfix.fix42.OrderCancelRequest;
 import java.util.List;
 
 /**
- * Handles FIX 4.4 OrderCancelRequest (F) messages.
+ * Handles FIX 4.2 OrderCancelRequest (F) messages.
  */
 public class CancelHandler {
 

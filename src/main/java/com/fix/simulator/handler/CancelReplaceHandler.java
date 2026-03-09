@@ -17,7 +17,7 @@ import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * Handles FIX 4.4 OrderCancelReplaceRequest (G) messages.
+ * Handles FIX 4.2 OrderCancelReplaceRequest (G) messages.
  *
  * <p>Supported modifications: order qty and limit price.
  * Symbol / side / type changes are rejected.

@@ -18,7 +18,7 @@ import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * Handles FIX 4.4 Quote (S) and MassQuote (i) messages.
+ * Handles FIX 4.2 Quote (S) and MassQuote (i) messages.
  *
  * <p>Each leg is inserted as a resting limit order on both sides, updating
  * the market data snapshot. Any immediate fills are sent back as
@@ -47,7 +47,7 @@ public class QuoteHandler {
     }
 
     // ──────────────────────────────────────────────────────────────────────
-    //  FIX 4.4 Quote (35=S)
+    //  FIX 4.2 Quote (35=S)
     // ──────────────────────────────────────────────────────────────────────
 
     public void handleQuote(Quote msg, SessionID sessionId) {
@@ -90,7 +90,7 @@ public class QuoteHandler {
     }
 
     // ──────────────────────────────────────────────────────────────────────
-    //  FIX 4.4 MassQuote (35=i)
+    //  FIX 4.2 MassQuote (35=i)
     // ──────────────────────────────────────────────────────────────────────
 
     public void handleMassQuote(MassQuote msg, SessionID sessionId) {

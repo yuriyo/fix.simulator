@@ -20,7 +20,7 @@ import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * Handles FIX 4.4 NewOrderSingle (D) messages.
+ * Handles FIX 4.2 NewOrderSingle (D) messages.
  */
 public class NewOrderHandler {
 

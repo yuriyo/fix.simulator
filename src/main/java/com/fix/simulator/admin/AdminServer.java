@@ -220,6 +220,11 @@ public class AdminServer {
                 m.put("open",        stats.get("open"));
                 m.put("cancelled",   stats.get("cancelled"));
                 m.put("filled",      stats.get("filled"));
+                // Sequence numbers (available from QuickFIX/J Session object)
+                SessionID sid = clientRegistry.resolve(rec.sessionId);
+                Session qfSession = sid != null ? Session.lookupSession(sid) : null;
+                m.put("seqIn",  qfSession != null ? qfSession.getExpectedTargetNum() : null);
+                m.put("seqOut", qfSession != null ? qfSession.getExpectedSenderNum() : null);
                 result.add(m);
             }
             ctx.json(result);

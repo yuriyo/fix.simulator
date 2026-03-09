@@ -133,6 +133,8 @@ export default function ClientsPanel({ onViewMessages }) {
                 <th>Status</th>
                 <th>Login</th>
                 <th>Logout</th>
+                <th style={{ textAlign: 'right' }}>SeqIn</th>
+                <th style={{ textAlign: 'right' }}>SeqOut</th>
                 <th style={{ textAlign: 'right' }}>Orders</th>
                 <th style={{ textAlign: 'right' }}>Open</th>
                 <th style={{ textAlign: 'right' }}>Cancelled</th>
@@ -152,6 +154,8 @@ export default function ClientsPanel({ onViewMessages }) {
                   </td>
                   <td style={{ fontSize: 11, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{fmtTime(s.loginTime)}</td>
                   <td style={{ fontSize: 11, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{fmtTime(s.logoutTime)}</td>
+                  <td style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: 12, color: s.seqIn != null ? '#38bdf8' : '#64748b' }}>{s.seqIn ?? '–'}</td>
+                  <td style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: 12, color: s.seqOut != null ? '#38bdf8' : '#64748b' }}>{s.seqOut ?? '–'}</td>
                   <td style={{ textAlign: 'right' }}>{s.orders}</td>
                   <td style={{ textAlign: 'right' }}>{s.open}</td>
                   <td style={{ textAlign: 'right' }}>{s.cancelled}</td>
