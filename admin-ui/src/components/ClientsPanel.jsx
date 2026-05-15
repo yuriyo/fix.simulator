@@ -27,6 +27,11 @@ export default function ClientsPanel({ onViewMessages }) {
   const [filter,   setFilter]   = useState('');
   const [viewTab,  setViewTab]  = useState('all');   // all | active | done
 
+  // ── Sequence reset dialog state ──────────────────────────────────────────
+  const [rstDialog, setRstDialog] = useState(null); // null | { compId, seqIn, seqOut }
+  const [rstError,  setRstError]  = useState('');
+  const [rstBusy,   setRstBusy]   = useState(false);
+
   const load = () => {
     fetch(`${API}/sessions`).then(r => r.json()).then(setSessions).catch(() => {});
     fetch(`${API}/clients/blocked`).then(r => r.json()).then(d => setBlocked(d.blocked ?? [])).catch(() => {});
@@ -38,6 +43,34 @@ export default function ClientsPanel({ onViewMessages }) {
   const disconnect = async (e, compId) => {
     if (!e.shiftKey && !(await confirm(`Force disconnect ${compId}?`))) return;
     fetch(`${API}/clients/${compId}`, { method: 'DELETE' }).then(load);
+  };
+
+  const openRstDialog = (s) => {
+    setRstError('');
+    setRstDialog({ compId: s.compId, seqIn: s.seqIn ?? '', seqOut: s.seqOut ?? '' });
+  };
+
+  const submitRstSeq = () => {
+    if (!rstDialog) return;
+    const seqIn  = parseInt(rstDialog.seqIn,  10);
+    const seqOut = parseInt(rstDialog.seqOut, 10);
+    if (!Number.isInteger(seqIn)  || seqIn  < 1) { setRstError('SeqIn must be a positive integer');  return; }
+    if (!Number.isInteger(seqOut) || seqOut < 1) { setRstError('SeqOut must be a positive integer'); return; }
+    setRstBusy(true);
+    setRstError('');
+    fetch(`${API}/sessions/${encodeURIComponent(rstDialog.compId)}/reset-seq`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seqIn, seqOut }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        setRstBusy(false);
+        if (d.error) { setRstError(d.error); return; }
+        setRstDialog(null);
+        load();
+      })
+      .catch(err => { setRstBusy(false); setRstError(String(err)); });
   };
 
   const addBlocked = async () => {
@@ -165,6 +198,10 @@ export default function ClientsPanel({ onViewMessages }) {
                       onClick={() => onViewMessages && onViewMessages(s.compId)}>
                       Messages
                     </button>
+                    <button className="btn-subtle" style={{ marginRight: 4 }}
+                      onClick={() => openRstDialog(s)}>
+                      RstSeq
+                    </button>
                     {s.active && (
                       <button className="btn-danger" onClick={e => disconnect(e, s.compId)}>
                         Disconnect
@@ -255,5 +292,49 @@ export default function ClientsPanel({ onViewMessages }) {
         </div>
       </div>
     </div>
+
+    {/* ── Sequence Reset Dialog ─────────────────────────────────────────── */}
+    {rstDialog && (
+      <div className="confirm-overlay" onClick={() => !rstBusy && setRstDialog(null)}>
+        <div className="confirm-box" onClick={e => e.stopPropagation()} style={{ minWidth: 340 }}>
+          <p className="confirm-msg">Reset sequence numbers for <strong>{rstDialog.compId}</strong></p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+            <label style={{ fontSize: 12, color: '#94a3b8' }}>
+              SeqIn (next expected from client)
+              <input
+                className="filter-input"
+                type="number"
+                min="1"
+                style={{ display: 'block', width: '100%', marginTop: 4 }}
+                value={rstDialog.seqIn}
+                onChange={e => setRstDialog(d => ({ ...d, seqIn: e.target.value }))}
+                onKeyDown={e => e.key === 'Enter' && submitRstSeq()}
+                disabled={rstBusy}
+              />
+            </label>
+            <label style={{ fontSize: 12, color: '#94a3b8' }}>
+              SeqOut (next to send to client)
+              <input
+                className="filter-input"
+                type="number"
+                min="1"
+                style={{ display: 'block', width: '100%', marginTop: 4 }}
+                value={rstDialog.seqOut}
+                onChange={e => setRstDialog(d => ({ ...d, seqOut: e.target.value }))}
+                onKeyDown={e => e.key === 'Enter' && submitRstSeq()}
+                disabled={rstBusy}
+              />
+            </label>
+            {rstError && <p style={{ color: '#fca5a5', fontSize: 12, margin: 0 }}>{rstError}</p>}
+          </div>
+          <div className="confirm-actions">
+            <button className="btn-subtle" onClick={() => setRstDialog(null)} disabled={rstBusy}>Cancel</button>
+            <button className="btn-primary" onClick={submitRstSeq} disabled={rstBusy} autoFocus>
+              {rstBusy ? 'Resetting…' : 'Reset'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
   );
 }

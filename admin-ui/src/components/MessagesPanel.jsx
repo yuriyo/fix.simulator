@@ -53,9 +53,11 @@ export default function MessagesPanel({ onBack }) {
   const init = getParams();
   const [clientId, setClientId] = useState(init.clientId);
   const [symbol,   setSymbol]   = useState(init.symbol);
+  const [text,     setText]     = useState('');
   const [data,     setData]     = useState({ total: 0, page: 1, pageSize: 50, pageCount: 0, messages: [] });
   const [pageSize, setPageSize] = useState(50);
   const [page,     setPage]     = useState(1);
+  const [pageInput, setPageInput] = useState(''); // controlled input for direct page nav
   const [expanded, setExpanded] = useState(null); // message id that is expanded
   const [loading,  setLoading]  = useState(false);
 
@@ -75,11 +77,12 @@ export default function MessagesPanel({ onBack }) {
     }).catch(() => {});
   }, []);
 
-  const fetchPage = useCallback((cid, sym, pg, ps) => {
+  const fetchPage = useCallback((cid, sym, txt, pg, ps) => {
     setLoading(true);
     const q = new URLSearchParams();
     if (cid) q.set('clientId', cid);
     if (sym) q.set('symbol',   sym);
+    if (txt) q.set('text',     txt);
     q.set('page', pg);
     q.set('pageSize', ps);
     fetch(`${API}/messages?${q}`)
@@ -91,20 +94,28 @@ export default function MessagesPanel({ onBack }) {
   // (Re-)fetch whenever filters or page/size change
   useEffect(() => {
     setParams(clientId, symbol);
-    fetchPage(clientId, symbol, page, pageSize);
-  }, [clientId, symbol, page, pageSize, fetchPage]);
+    fetchPage(clientId, symbol, text, page, pageSize);
+  }, [clientId, symbol, text, page, pageSize, fetchPage]);
 
   const applyFilter = () => {
     setPage(1);
     setExpanded(null);
     setParams(clientId, symbol);
-    fetchPage(clientId, symbol, 1, pageSize);
+    fetchPage(clientId, symbol, text, 1, pageSize);
   };
 
   const handlePageSize = (ps) => {
     setPageSize(ps);
     setPage(1);
     setExpanded(null);
+  };
+
+  const handlePageInputCommit = () => {
+    const n = parseInt(pageInput, 10);
+    if (Number.isInteger(n) && n >= 1 && n <= data.pageCount) {
+      setPage(n);
+    }
+    setPageInput('');
   };
 
   const toggleExpand = (id) => setExpanded(prev => prev === id ? null : id);
@@ -135,6 +146,15 @@ export default function MessagesPanel({ onBack }) {
           <option value="">All symbols</option>
           {symbols.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
+
+        <span className="toolbar-label">Text</span>
+        <input
+          className="filter-input"
+          placeholder="Search tag values…"
+          value={text}
+          onChange={e => { setText(e.target.value); setPage(1); }}
+          style={{ minWidth: 180 }}
+        />
 
         <button className="btn-subtle" onClick={applyFilter}>Apply</button>
 
@@ -209,7 +229,22 @@ export default function MessagesPanel({ onBack }) {
         <div className="pagination">
           <button className="btn-subtle" onClick={() => setPage(1)}        disabled={page <= 1}>«</button>
           <button className="btn-subtle" onClick={() => setPage(p => p-1)} disabled={page <= 1}>‹</button>
-          <span className="page-info">Page {page} / {pageCount} ({total} rows)</span>
+          <span className="page-info">Page</span>
+          <input
+            type="number"
+            min="1"
+            max={pageCount}
+            value={pageInput !== '' ? pageInput : page}
+            onChange={e => setPageInput(e.target.value)}
+            onBlur={handlePageInputCommit}
+            onKeyDown={e => { if (e.key === 'Enter') { handlePageInputCommit(); e.target.blur(); } }}
+            style={{
+              width: 52, background: '#0f1117', border: '1px solid #2d3148',
+              color: '#e2e8f0', borderRadius: 5, padding: '3px 6px',
+              fontSize: 12, textAlign: 'center',
+            }}
+          />
+          <span className="page-info">/ {pageCount} ({total} rows)</span>
           <button className="btn-subtle" onClick={() => setPage(p => p+1)} disabled={page >= pageCount}>›</button>
           <button className="btn-subtle" onClick={() => setPage(pageCount)} disabled={page >= pageCount}>»</button>
           <select className="filter-select" value={pageSize}

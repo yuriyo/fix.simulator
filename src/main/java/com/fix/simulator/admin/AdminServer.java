@@ -230,15 +230,77 @@ public class AdminServer {
             ctx.json(result);
         });
 
+        // ── Session sequence reset ─────────────────────────────────────
+        app.post("/api/sessions/{compId}/reset-seq", ctx -> {
+            String compId = ctx.pathParam("compId");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = ctx.bodyAsClass(Map.class);
+            if (body == null) { ctx.status(400).json(error("body required")); return; }
+            int seqIn  = parseInt(body.get("seqIn")  != null ? body.get("seqIn").toString()  : null, -1);
+            int seqOut = parseInt(body.get("seqOut") != null ? body.get("seqOut").toString() : null, -1);
+            if (seqIn < 1 || seqOut < 1) {
+                ctx.status(400).json(error("seqIn and seqOut must be >= 1")); return;
+            }
+            boolean found = false;
+            for (ClientRegistry.SessionRecord rec : clientRegistry.getSessionHistory()) {
+                if (!rec.compId.equals(compId)) continue;
+                SessionID sid = clientRegistry.resolve(rec.sessionId);
+                if (sid == null) continue;
+                Session qfSession = Session.lookupSession(sid);
+                if (qfSession == null) continue;
+                try {
+                    qfSession.setNextTargetMsgSeqNum(seqIn);
+                    qfSession.setNextSenderMsgSeqNum(seqOut);
+                    found = true;
+                } catch (Exception e) {
+                    ctx.status(500).json(error("Reset failed: " + e.getMessage())); return;
+                }
+            }
+            if (!found) { ctx.status(404).json(error("No active session for " + compId)); return; }
+            ctx.json(Map.of("status", "ok", "compId", compId, "seqIn", seqIn, "seqOut", seqOut));
+        });
+
+        // ── Admin book level management ────────────────────────────────
+        app.post("/api/instruments/{symbol}/book", ctx -> {
+            String symbol = ctx.pathParam("symbol");
+            if (!engine.hasSymbol(symbol)) { ctx.status(404).json(error("Unknown symbol: " + symbol)); return; }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = ctx.bodyAsClass(Map.class);
+            if (body == null) { ctx.status(400).json(error("body required")); return; }
+            String sideStr  = body.get("side")  != null ? body.get("side").toString()  : null;
+            String priceStr = body.get("price") != null ? body.get("price").toString() : null;
+            String qtyStr   = body.get("qty")   != null ? body.get("qty").toString()   : null;
+            if (sideStr == null || priceStr == null || qtyStr == null) {
+                ctx.status(400).json(error("side, price and qty are required")); return;
+            }
+            com.fix.simulator.engine.OrderSide side;
+            java.math.BigDecimal price;
+            long qty;
+            try {
+                side  = com.fix.simulator.engine.OrderSide.valueOf(sideStr.toUpperCase(Locale.ROOT));
+                price = new java.math.BigDecimal(priceStr);
+                qty   = Long.parseLong(qtyStr);
+            } catch (NumberFormatException e) {
+                ctx.status(400).json(error("Invalid price or qty")); return;
+            } catch (IllegalArgumentException e) {
+                ctx.status(400).json(error("Invalid side '" + sideStr + "'. Use BUY or SELL")); return;
+            }
+            if (qty < 0) { ctx.status(400).json(error("qty must be >= 0")); return; }
+            engine.setAdminBookLevel(symbol, side, price, qty);
+            ctx.json(Map.of("status", "ok", "symbol", symbol,
+                    "side", side.name(), "price", price.toPlainString(), "qty", qty));
+        });
+
         // ── FIX Messages ──────────────────────────────────────────────
         app.get("/api/messages", ctx -> {
             String compId  = ctx.queryParam("clientId");
             String symbol  = ctx.queryParam("symbol");
+            String text    = ctx.queryParam("text");
             int    page    = parseInt(ctx.queryParam("page"),     1);
             int    pgSize  = parseInt(ctx.queryParam("pageSize"), 100);
             pgSize = Math.min(Math.max(pgSize, 1), 500);
 
-            List<FIXMessageLog.Entry> all = messageLog.getMessages(compId, symbol);
+            List<FIXMessageLog.Entry> all = messageLog.getMessages(compId, symbol, text);
             int total = all.size();
             int pageCount = (int) Math.ceil((double) total / pgSize);
             page = Math.max(1, Math.min(page, Math.max(1, pageCount)));

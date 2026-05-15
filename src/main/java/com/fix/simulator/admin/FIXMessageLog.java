@@ -87,16 +87,38 @@ public class FIXMessageLog {
     }
 
     /**
-     * Return all entries matching the given filters (both optional / blank = no filter).
+     * Return all entries matching the given filters (all optional / blank = no filter).
      * Newest first.
      */
     public List<Entry> getMessages(String compId, String symbol) {
+        return getMessages(compId, symbol, null);
+    }
+
+    /**
+     * Return all entries matching the given filters (all optional / blank = no filter).
+     * {@code text} is matched case-insensitively against any tag value, compId, symbol,
+     * or msgType.  Newest first.
+     */
+    public List<Entry> getMessages(String compId, String symbol, String text) {
         List<Entry> all = new ArrayList<>(entries);
         Collections.reverse(all);
         return all.stream()
                 .filter(e -> compId == null || compId.isBlank() || compId.equals(e.compId))
                 .filter(e -> symbol == null || symbol.isBlank() || symbol.equals(e.symbol))
+                .filter(e -> text == null || text.isBlank() || matchesText(e, text))
                 .collect(Collectors.toList());
+    }
+
+    private static boolean matchesText(Entry e, String text) {
+        String lower = text.toLowerCase(java.util.Locale.ROOT);
+        if (e.compId  != null && e.compId.toLowerCase(java.util.Locale.ROOT).contains(lower))  return true;
+        if (e.symbol  != null && e.symbol.toLowerCase(java.util.Locale.ROOT).contains(lower))  return true;
+        if (e.msgType != null && e.msgType.toLowerCase(java.util.Locale.ROOT).contains(lower)) return true;
+        for (Map<String, Object> tag : e.tags) {
+            Object val = tag.get("val");
+            if (val != null && val.toString().toLowerCase(java.util.Locale.ROOT).contains(lower)) return true;
+        }
+        return false;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

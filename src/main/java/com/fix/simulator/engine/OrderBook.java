@@ -239,6 +239,42 @@ public class OrderBook {
         return levels;
     }
 
+    /**
+     * Admin: atomically replace all resting orders at a price level with a single
+     * synthetic order representing the desired quantity.
+     *
+     * <p>A {@code qty} of 0 (or less) removes the level entirely without inserting
+     * a new order.
+     *
+     * @return the inserted admin Order, or {@code null} if the level was removed
+     */
+    public synchronized Order setAdminLevel(OrderSide side, BigDecimal price, long qty) {
+        TreeMap<BigDecimal, ArrayDeque<Order>> sideMap = sideMap(side);
+        ArrayDeque<Order> existing = sideMap.remove(price);
+        if (existing != null) {
+            for (Order o : existing) deindex(o);
+        }
+        if (qty <= 0) return null;
+        Order adminOrder = new Order(
+                "ADMIN", "ADMIN-" + System.nanoTime(), null,
+                symbol, side, OrderType.LIMIT, TimeInForce.GTC,
+                qty, price, null);
+        sideMap.computeIfAbsent(price, k -> new ArrayDeque<>()).addLast(adminOrder);
+        index(adminOrder);
+        return adminOrder;
+    }
+
+    /**
+     * Return the total resting quantity at a price level on a side (0 if no level).
+     */
+    public synchronized long getLevelQty(OrderSide side, BigDecimal price) {
+        ArrayDeque<Order> queue = sideMap(side).get(price);
+        if (queue == null) return 0;
+        long total = 0;
+        for (Order o : queue) total += o.getOpenQty();
+        return total;
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     //  Private helpers
     // ──────────────────────────────────────────────────────────────────────

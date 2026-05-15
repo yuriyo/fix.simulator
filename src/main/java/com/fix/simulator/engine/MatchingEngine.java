@@ -508,4 +508,28 @@ public class MatchingEngine {
         evt.put("filledQty", order.getFilledQty());
         bus.publish(evt);
     }
+
+    // ── Admin book management ─────────────────────────────────────────────────
+
+    /**
+     * Admin: atomically set a synthetic price level on the book and publish a
+     * {@code book_update} WebSocket event.
+     */
+    public void setAdminBookLevel(String symbol, OrderSide side, BigDecimal price, long qty) {
+        OrderBook book = books.get(symbol);
+        if (book == null) return;
+        book.setAdminLevel(side, price, qty);
+        publishBookUpdate(symbol, book);
+    }
+
+    private void publishBookUpdate(String symbol, OrderBook book) {
+        EventBus bus = this.eventBus;
+        if (bus == null) return;
+        Map<String, Object> evt = new LinkedHashMap<>();
+        evt.put("type",   "book_update");
+        evt.put("symbol", symbol);
+        evt.put("bids",   book.getBidLevels(100));
+        evt.put("asks",   book.getAskLevels(100));
+        bus.publish(evt);
+    }
 }
