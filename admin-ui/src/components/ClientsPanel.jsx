@@ -117,7 +117,7 @@ export default function ClientsPanel({ onViewMessages }) {
   const activeCount = sessions.filter(s => s.active).length;
 
   return (
-    <div>
+    <>
       {/* Sessions table */}
       <div className="card">
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
@@ -291,11 +291,10 @@ export default function ClientsPanel({ onViewMessages }) {
             )}
         </div>
       </div>
-    </div>
 
     {/* ── Sequence Reset Dialog ─────────────────────────────────────────── */}
     {rstDialog && (
-      <div className="confirm-overlay" onClick={() => !rstBusy && setRstDialog(null)}>
+      <div className="confirm-overlay" style={{ zIndex: 100 }} onClick={() => !rstBusy && setRstDialog(null)}>
         <div className="confirm-box" onClick={e => e.stopPropagation()} style={{ minWidth: 340 }}>
           <p className="confirm-msg">Reset sequence numbers for <strong>{rstDialog.compId}</strong></p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
@@ -336,5 +335,6 @@ export default function ClientsPanel({ onViewMessages }) {
         </div>
       </div>
     )}
+  </>
   );
 }
