@@ -16,16 +16,24 @@
         </encoder>
     </appender>
 
+    <!-- Async wrapper: FILE writes happen on a background thread, never blocking the QFJ session thread -->
+    <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>10000</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <appender-ref ref="FILE"/>
+    </appender>
+
     <!-- QuickFIX/J session-level logs go to its own file log (FileLogFactory);
          suppress the internal QFJ loggers to reduce noise -->
     <logger name="quickfix" level="WARN"/>
     <logger name="org.quickfixj" level="WARN"/>
 
-    <!-- Exchange simulator -->
+    <!-- Exchange simulator: order-level detail at DEBUG only -->
     <logger name="com.fix.simulator" level="INFO"/>
+    <logger name="com.fix.simulator.handler" level="WARN"/>
 
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="FILE"/>
+        <appender-ref ref="ASYNC_FILE"/>
     </root>
 </configuration>

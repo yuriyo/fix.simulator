@@ -34,10 +34,10 @@ public class MatchingEngine {
     private final ConcurrentHashMap<Long, Order> allOrders = new ConcurrentHashMap<>();
 
     /** Trade log: one record per matched aggressor fill. */
-    private final List<Map<String, Object>> tradeLog = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final List<Map<String, Object>> tradeLog = new ArrayList<>();
 
     /** Execution log: every execution report (NEW, FILL, PARTIAL_FILL, CANCELLED, etc.). */
-    private final List<Map<String, Object>> executionLog = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final List<Map<String, Object>> executionLog = new ArrayList<>();
 
     // ──────────────────────────────────────────────────────────────────────
     //  Admin wiring (optional setters – no constructor change keeps tests green)
@@ -267,10 +267,12 @@ public class MatchingEngine {
 
     /** Trade log (one record per aggressor fill). Filterable by symbol. */
     public List<Map<String, Object>> getTradeLog(String symbol) {
-        if (symbol == null || symbol.isEmpty()) return Collections.unmodifiableList(tradeLog);
-        return tradeLog.stream()
-                .filter(t -> symbol.equals(t.get("symbol")))
-                .collect(Collectors.toList());
+        synchronized (tradeLog) {
+            if (symbol == null || symbol.isEmpty()) return new ArrayList<>(tradeLog);
+            return tradeLog.stream()
+                    .filter(t -> symbol.equals(t.get("symbol")))
+                    .collect(Collectors.toList());
+        }
     }
 
     /** Symbols that have at least one completed trade. */
@@ -282,11 +284,13 @@ public class MatchingEngine {
 
     /** Execution log – all execution reports. Filterable by symbol and clientId substring. */
     public List<Map<String, Object>> getExecutionLog(String symbol, String clientId) {
-        return executionLog.stream()
-                .filter(e -> symbol == null || symbol.isEmpty()   || symbol.equals(e.get("symbol")))
-                .filter(e -> clientId == null || clientId.isEmpty() ||
-                             ((String) e.getOrDefault("sessionId", "")).contains(clientId))
-                .collect(Collectors.toList());
+        synchronized (executionLog) {
+            return executionLog.stream()
+                    .filter(e -> symbol == null || symbol.isEmpty()   || symbol.equals(e.get("symbol")))
+                    .filter(e -> clientId == null || clientId.isEmpty() ||
+                                 ((String) e.getOrDefault("sessionId", "")).contains(clientId))
+                    .collect(Collectors.toList());
+        }
     }
 
     /** All resting (active) orders across every symbol. */
@@ -423,7 +427,7 @@ public class MatchingEngine {
                     tradeMap.put("price",        e.getPrice().toPlainString());
                     tradeMap.put("qty",          e.getQty());
                     tradeMap.put("aggressorSide", aggressor.getSide().name());
-                    tradeLog.add(tradeMap);
+                    synchronized (tradeLog) { tradeLog.add(tradeMap); }
 
                     if (bus != null) {
                         Map<String, Object> wsMsg = new LinkedHashMap<>(tradeMap);
@@ -458,7 +462,9 @@ public class MatchingEngine {
         m.put("clOrdId",   e.getOrder().getClOrdId());
         m.put("sessionId", e.getOrder().getSessionId());
         m.put("orderId",   e.getOrder().getInternalId());
-        executionLog.add(m);
+        synchronized (executionLog) {
+            executionLog.add(m);
+        }
     }
 
     /**

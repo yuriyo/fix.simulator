@@ -8,7 +8,7 @@ import quickfix.Message;
 
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.ArrayDeque;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
@@ -58,7 +58,7 @@ public class FIXMessageLog {
 
     // ── Storage ───────────────────────────────────────────────────────────
 
-    private final CopyOnWriteArrayList<Entry> entries = new CopyOnWriteArrayList<>();
+    private final ArrayDeque<Entry> entries = new ArrayDeque<>(MAX_MESSAGES);
     private final AtomicLong seq = new AtomicLong(0);
 
     // ── Public API ────────────────────────────────────────────────────────
@@ -78,9 +78,10 @@ public class FIXMessageLog {
             List<Map<String, Object>> tags = extractTags(message);
             Entry e = new Entry(seq.incrementAndGet(), sessionId, compId,
                                 direction, msgType, symbol, Instant.now(), tags);
-            entries.add(e);
-            // Drop oldest when over cap
-            while (entries.size() > MAX_MESSAGES) entries.remove(0);
+            synchronized (entries) {
+                entries.addLast(e);
+                if (entries.size() > MAX_MESSAGES) entries.removeFirst();
+            }
         } catch (Exception ex) {
             log.debug("FIXMessageLog.record skipped: {}", ex.getMessage());
         }
@@ -100,7 +101,8 @@ public class FIXMessageLog {
      * or msgType.  Newest first.
      */
     public List<Entry> getMessages(String compId, String symbol, String text) {
-        List<Entry> all = new ArrayList<>(entries);
+        List<Entry> all;
+        synchronized (entries) { all = new ArrayList<>(entries); }
         Collections.reverse(all);
         return all.stream()
                 .filter(e -> compId == null || compId.isBlank() || compId.equals(e.compId))

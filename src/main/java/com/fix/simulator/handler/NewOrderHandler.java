@@ -104,7 +104,7 @@ public class NewOrderHandler {
                     symbol, side, type, tif,
                     (long) qty, limitPx, stopPx);
 
-            log.info("[{}] NewOrder {}", sessionId.getSenderCompID(), order);
+            log.debug("[{}] NewOrder {}", sessionId.getSenderCompID(), order);
 
             List<Execution> execs = engine.newOrder(order);
             for (Execution exec : execs) {
