@@ -43,7 +43,21 @@ public class MatchingEngine {
     //  Admin wiring (optional setters – no constructor change keeps tests green)
     // ──────────────────────────────────────────────────────────────────────
 
-    public void setEventBus(EventBus eventBus)                 { this.eventBus     = eventBus; }
+    public void setEventBus(EventBus eventBus) {
+        this.eventBus = eventBus;
+        if (eventBus != null) {
+            eventBus.setBookSnapshotProvider(sym -> {
+                OrderBook b = books.get(sym);
+                if (b == null) return null;
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("type",   "book_update");
+                m.put("symbol", sym);
+                m.put("bids",   b.getBidLevels(100));
+                m.put("asks",   b.getAskLevels(100));
+                return m;
+            });
+        }
+    }
     public void setStateManager(InstrumentStateManager sm)     { this.stateManager = sm; }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -141,19 +155,9 @@ public class MatchingEngine {
         Execution cancelExec = new Execution(order, 0, null, Execution.ExecType.CANCELLED);
         logExecution(cancelExec);
 
-        // Publish book snapshot so the UI reflects the removed order
+        // Mark book dirty so the UI reflects the removed order on next tick
         EventBus bus = this.eventBus;
-        if (bus != null) {
-            OrderBook cancelBook = books.get(symbol);
-            if (cancelBook != null) {
-                Map<String, Object> bookEvt = new LinkedHashMap<>();
-                bookEvt.put("type",   "book_update");
-                bookEvt.put("symbol", symbol);
-                bookEvt.put("bids",   cancelBook.getBidLevels(100));
-                bookEvt.put("asks",   cancelBook.getAskLevels(100));
-                bus.publish(bookEvt);
-            }
-        }
+        if (bus != null) bus.markBookDirty(symbol);
 
         return List.of(cancelExec);
     }
@@ -437,16 +441,8 @@ public class MatchingEngine {
                 }
             }
         }
-        // Book-update snapshot (100 levels each side).
-        // Always publish so resting orders (no fill) still appear in the book view.
-        if (bus != null) {
-            Map<String, Object> bookEvt = new LinkedHashMap<>();
-            bookEvt.put("type",   "book_update");
-            bookEvt.put("symbol", symbol);
-            bookEvt.put("bids",   book.getBidLevels(100));
-            bookEvt.put("asks",   book.getAskLevels(100));
-            bus.publish(bookEvt);
-        }
+        // Mark book dirty; the tick thread will snapshot levels once per 200 ms.
+        if (bus != null) bus.markBookDirty(symbol);
     }
 
     /** Append a single execution to the execution log. */
@@ -531,11 +527,6 @@ public class MatchingEngine {
     private void publishBookUpdate(String symbol, OrderBook book) {
         EventBus bus = this.eventBus;
         if (bus == null) return;
-        Map<String, Object> evt = new LinkedHashMap<>();
-        evt.put("type",   "book_update");
-        evt.put("symbol", symbol);
-        evt.put("bids",   book.getBidLevels(100));
-        evt.put("asks",   book.getAskLevels(100));
-        bus.publish(evt);
+        bus.markBookDirty(symbol);
     }
 }

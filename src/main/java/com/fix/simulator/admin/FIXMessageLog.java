@@ -2,7 +2,6 @@ package com.fix.simulator.admin;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import quickfix.Field;
 import quickfix.FieldMap;
 import quickfix.Message;
 
@@ -39,12 +38,12 @@ public class FIXMessageLog {
         public final String msgType;   // tag 35
         public final String symbol;    // tag 55, may be null
         public final Instant time;
-        /** Ordered list of {tag, val} maps, header → body → trailer. */
-        public final List<Map<String, Object>> tags;
+        private final String rawFix;
+        /** Ordered list of {tag, val} maps; parsed lazily on first access. */
+        private volatile List<Map<String, Object>> tags;
 
         Entry(long id, String sessionId, String compId, Direction direction,
-              String msgType, String symbol, Instant time,
-              List<Map<String, Object>> tags) {
+              String msgType, String symbol, Instant time, String rawFix) {
             this.id        = id;
             this.sessionId = sessionId;
             this.compId    = compId;
@@ -52,7 +51,27 @@ public class FIXMessageLog {
             this.msgType   = msgType;
             this.symbol    = symbol;
             this.time      = time;
-            this.tags      = tags;
+            this.rawFix    = rawFix;
+        }
+
+        public List<Map<String, Object>> getTags() {
+            if (tags == null) {
+                synchronized (this) {
+                    if (tags == null) tags = parseTags(rawFix);
+                }
+            }
+            return tags;
+        }
+
+        /** Parse a raw FIX string (SOH-delimited) into [{tag, val}] maps. */
+        private static List<Map<String, Object>> parseTags(String raw) {
+            if (raw == null) return List.of();
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (String pair : raw.split("\u0001")) {
+                int eq = pair.indexOf('=');
+                if (eq > 0) result.add(Map.of("tag", pair.substring(0, eq), "val", pair.substring(eq + 1)));
+            }
+            return result;
         }
     }
 
@@ -75,9 +94,9 @@ public class FIXMessageLog {
         try {
             String msgType = safeGet(message.getHeader(), 35);
             String symbol  = safeGet(message, 55);
-            List<Map<String, Object>> tags = extractTags(message);
+            String rawFix  = message.toString();
             Entry e = new Entry(seq.incrementAndGet(), sessionId, compId,
-                                direction, msgType, symbol, Instant.now(), tags);
+                                direction, msgType, symbol, Instant.now(), rawFix);
             synchronized (entries) {
                 entries.addLast(e);
                 if (entries.size() > MAX_MESSAGES) entries.removeFirst();
@@ -116,7 +135,7 @@ public class FIXMessageLog {
         if (e.compId  != null && e.compId.toLowerCase(java.util.Locale.ROOT).contains(lower))  return true;
         if (e.symbol  != null && e.symbol.toLowerCase(java.util.Locale.ROOT).contains(lower))  return true;
         if (e.msgType != null && e.msgType.toLowerCase(java.util.Locale.ROOT).contains(lower)) return true;
-        for (Map<String, Object> tag : e.tags) {
+        for (Map<String, Object> tag : e.getTags()) {
             Object val = tag.get("val");
             if (val != null && val.toString().toLowerCase(java.util.Locale.ROOT).contains(lower)) return true;
         }
@@ -127,21 +146,5 @@ public class FIXMessageLog {
 
     private static String safeGet(FieldMap fm, int tag) {
         try { return fm.getString(tag); } catch (Exception e) { return null; }
-    }
-
-    private static List<Map<String, Object>> extractTags(Message msg) {
-        List<Map<String, Object>> result = new ArrayList<>();
-        addFields(msg.getHeader(), result);
-        addFields(msg, result);
-        addFields(msg.getTrailer(), result);
-        return result;
-    }
-
-    private static void addFields(FieldMap fm, List<Map<String, Object>> out) {
-        Iterator<Field<?>> it = fm.iterator();
-        while (it.hasNext()) {
-            Field<?> f = it.next();
-            out.add(Map.of("tag", f.getTag(), "val", String.valueOf(f.getObject())));
-        }
     }
 }

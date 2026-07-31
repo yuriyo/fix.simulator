@@ -320,7 +320,7 @@ public class AdminServer {
                 m.put("msgType",   e.msgType);
                 m.put("symbol",    e.symbol);
                 m.put("time",      e.time.toString());
-                m.put("tags",      e.tags);
+                m.put("tags",      e.getTags());
                 rows.add(m);
             }
             ctx.json(Map.of(
