@@ -7,7 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Default configuration
 IMAGE_NAME="${IMAGE_NAME:-fix-simulator}"
-REGISTRY="${REGISTRY:-localhost:5050}"
+IMAGE_PREFIX="${IMAGE_PREFIX:-}"   # optional namespace path, e.g. "team" -> team/fix-simulator
+REGISTRY="${REGISTRY:-}"           # optional registry host, e.g. "registry.example.com:5000"
 VERSION="${VERSION:-latest}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 PUSH_LATEST="${PUSH_LATEST:-true}"
@@ -48,21 +49,23 @@ Commands:
 
 Options:
   --version <tag>      Image version tag (default: latest)
-  --registry <url>     Registry URL (default: localhost:5050)
+  --registry <url>     Registry host (default: none; required for push)
+  --prefix <path>      Namespace path inside the registry (default: none)
   --platform <arch>    Platform (default: linux/amd64)
   --no-latest          Don't tag/push as latest
   --no-cache           Build without Docker layer cache
 
 Environment variables:
   IMAGE_NAME           Image name (default: fix-simulator)
-  REGISTRY             Registry URL
+  IMAGE_PREFIX         Namespace path (default: none)
+  REGISTRY             Registry host (default: none)
   VERSION              Version tag
 
 Examples:
   $0 build-push --version 1.2.0
   $0 build --no-cache
   $0 push --version 1.2.0 --registry registry.domain
-  REGISTRY=registry.domain $0 build-push --version 1.0.0
+  REGISTRY=registry.domain IMAGE_PREFIX=team $0 build-push --version 1.0.0
 EOF
 }
 
@@ -75,6 +78,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --version)   VERSION="$2"; shift 2;;
     --registry)  REGISTRY="$2"; shift 2;;
+    --prefix)    IMAGE_PREFIX="$2"; shift 2;;
     --platform)  PLATFORM="$2"; shift 2;;
     --no-latest) PUSH_LATEST=false; shift;;
     --no-cache)  NO_CACHE=true; shift;;
@@ -83,9 +87,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-LOCAL_IMAGE="$IMAGE_NAME:$VERSION"
-REGISTRY_IMAGE="$REGISTRY/$IMAGE_NAME:$VERSION"
-REGISTRY_LATEST="$REGISTRY/$IMAGE_NAME:latest"
+REPO="${IMAGE_PREFIX:+$IMAGE_PREFIX/}$IMAGE_NAME"
+LOCAL_IMAGE="$REPO:$VERSION"
+REGISTRY_PATH="${REGISTRY:+$REGISTRY/}$REPO"
+REGISTRY_IMAGE="$REGISTRY_PATH:$VERSION"
+REGISTRY_LATEST="$REGISTRY_PATH:latest"
 
 check_prerequisites() {
     log_step "Checking prerequisites..."
@@ -127,7 +133,7 @@ push_image() {
     log_step "Pushing image to registry: $REGISTRY"
 
     if [ -z "$REGISTRY" ]; then
-        log_error "REGISTRY not set"
+        log_error "REGISTRY not set (use --registry <host> or REGISTRY=<host>)"
         exit 1
     fi
 

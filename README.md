@@ -27,8 +27,11 @@ A FIX 4.4 exchange simulator built with **Java 17** and **QuickFIX/J 2.3.1**.
 ### Option A – Docker (recommended)
 
 ```bash
-# Build and push to registry (default: localhost:5050)
-./build.sh build-push --version 1.0.0
+# Build locally as fix-simulator:<version> (no registry, no namespace by default)
+./build.sh build --version 1.0.0
+
+# Build and push: a registry host is required for push
+./build.sh build-push --version 1.0.0 --registry registry.domain
 
 # Build only
 ./build.sh build
@@ -39,8 +42,8 @@ A FIX 4.4 exchange simulator built with **Java 17** and **QuickFIX/J 2.3.1**.
 # Build without Docker layer cache
 ./build.sh build --no-cache
 
-# Custom registry via env var
-REGISTRY=registry.domain ./build.sh build-push --version 1.0.0
+# Registry host and namespace via env vars
+REGISTRY=registry.domain IMAGE_PREFIX=team ./build.sh build-push --version 1.0.0
 
 # Show help
 ./build.sh help
