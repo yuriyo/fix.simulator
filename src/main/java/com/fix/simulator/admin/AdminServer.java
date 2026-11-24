@@ -16,8 +16,11 @@ import org.slf4j.LoggerFactory;
 import quickfix.Session;
 import quickfix.SessionID;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -56,6 +59,13 @@ public class AdminServer {
     private final int                    port;
 
     private Javalin app;
+
+    /** Bearer token required for every mutating request (POST / PUT / PATCH / DELETE). */
+    private final String adminToken;
+
+    /** Bind address. Loopback unless overridden with {@code -Dadmin.bind} or {@code ADMIN_BIND}. */
+    private final String bindAddress;
+
     private final ObjectMapper mapper = new ObjectMapper()
             .registerModule(new JavaTimeModule())
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -72,6 +82,36 @@ public class AdminServer {
         this.eventBus      = eventBus;
         this.messageLog    = messageLog;
         this.port          = port;
+        this.adminToken    = resolveAdminToken();
+        String bind        = System.getProperty("admin.bind", System.getenv("ADMIN_BIND"));
+        this.bindAddress  = (bind == null || bind.isBlank()) ? "127.0.0.1" : bind.trim();
+    }
+
+    /** Token that mutating admin requests must present as {@code Authorization: Bearer <token>}. */
+    public String adminToken() { return adminToken; }
+
+    private static String resolveAdminToken() {
+        String configured = System.getProperty("admin.token", System.getenv("ADMIN_TOKEN"));
+        if (configured != null && !configured.isBlank()) return configured.trim();
+        byte[] bytes = new byte[32];
+        new SecureRandom().nextBytes(bytes);
+        String generated = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        log.warn("No admin.token / ADMIN_TOKEN configured; generated one for this run: {}", generated);
+        return generated;
+    }
+
+    private static boolean isMutating(io.javalin.http.HandlerType type) {
+        return type == io.javalin.http.HandlerType.POST
+            || type == io.javalin.http.HandlerType.PUT
+            || type == io.javalin.http.HandlerType.PATCH
+            || type == io.javalin.http.HandlerType.DELETE;
+    }
+
+    private boolean isAuthorised(String authorizationHeader) {
+        if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) return false;
+        byte[] presented = authorizationHeader.substring("Bearer ".length()).trim()
+                .getBytes(StandardCharsets.UTF_8);
+        return MessageDigest.isEqual(presented, adminToken.getBytes(StandardCharsets.UTF_8));
     }
 
     public void start() {
@@ -81,9 +121,7 @@ public class AdminServer {
                 m.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
             }));
 
-            // CORS – allow all origins (no auth; admin is internal-only)
-            config.bundledPlugins.enableCors(cors ->
-                    cors.addRule(rule -> rule.anyHost()));
+            // No CORS plugin: the UI is served from this origin, so cross-origin access is denied.
 
             // Serve React build output when present
             Path uiDist = Path.of("admin-ui/dist");
@@ -95,6 +133,12 @@ public class AdminServer {
                 });
                 log.info("Admin UI static files served from {}", uiDist.toAbsolutePath());
             }
+        });
+
+        // ── Authentication: every mutating request needs the admin bearer token ──
+        app.before(ctx -> {
+            if (isMutating(ctx.method()) && !isAuthorised(ctx.header("Authorization")))
+                throw new io.javalin.http.UnauthorizedResponse("Missing or invalid admin token");
         });
 
         // ── WebSocket events ──────────────────────────────────────────────────
@@ -452,8 +496,8 @@ public class AdminServer {
             ctx.json(dash);
         });
 
-        app.start(port);
-        log.info("Admin server started on http://localhost:{}", port);
+        app.start(bindAddress, port);
+        log.info("Admin server started on http://{}:{}", bindAddress, port);
     }
 
     public void stop() {

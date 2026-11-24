@@ -54,6 +54,9 @@ public class InstrumentRegistry {
 
     public boolean isKnown(String symbol) { return instruments.containsKey(symbol); }
 
+    /** Instrument definition (lot size, tick size) or {@code null} if the symbol is unknown. */
+    public Instrument get(String symbol) { return instruments.get(symbol); }
+
     public Collection<Instrument> all() { return instruments.values(); }
 
     public Set<String> symbols() { return instruments.keySet(); }

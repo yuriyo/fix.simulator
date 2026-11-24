@@ -75,6 +75,22 @@ public class NewOrderHandler {
                 }
             }
 
+            // ── Quantity increment validation (lot size from instruments.yml) ─────
+            InstrumentRegistry.Instrument instrument = registry.get(symbol);
+            int        lotSize = instrument != null ? instrument.lotSize() : 1;
+            BigDecimal tick    = new BigDecimal(instrument != null ? instrument.tickSize() : "0.01");
+
+            if (qty <= 0 || qty != Math.rint(qty)) {
+                sender.sendReject(sessionId, clOrdId, null,
+                        "Quantity must be a positive whole number", OrdRejReason.BROKER_EXCHANGE_OPTION);
+                return;
+            }
+            if ((long) qty % lotSize != 0) {
+                sender.sendReject(sessionId, clOrdId, null,
+                        "Quantity must be a multiple of lot size " + lotSize, OrdRejReason.BROKER_EXCHANGE_OPTION);
+                return;
+            }
+
             OrderSide   side = parseSide(sideCh);
             OrderType   type = parseType(typeCh);
             TimeInForce tif  = parseTif(msg);
@@ -89,6 +105,12 @@ public class NewOrderHandler {
                     return;
                 }
                 limitPx = BigDecimal.valueOf(msg.getPrice().getValue());
+                if (!onTick(limitPx, tick)) {
+                    sender.sendReject(sessionId, clOrdId, null,
+                            "Price must be a multiple of tick size " + tick.toPlainString(),
+                            OrdRejReason.INVALID_PRICE_INCREMENT);
+                    return;
+                }
             }
             if (type == OrderType.STOP || type == OrderType.STOP_LIMIT) {
                 if (!msg.isSetStopPx()) {
@@ -97,6 +119,12 @@ public class NewOrderHandler {
                     return;
                 }
                 stopPx = BigDecimal.valueOf(msg.getStopPx().getValue());
+                if (!onTick(stopPx, tick)) {
+                    sender.sendReject(sessionId, clOrdId, null,
+                            "StopPx must be a multiple of tick size " + tick.toPlainString(),
+                            OrdRejReason.INVALID_PRICE_INCREMENT);
+                    return;
+                }
             }
 
             // ── Build and submit ────────────────────────────────────────────
@@ -117,6 +145,10 @@ public class NewOrderHandler {
     }
 
     // ── Parser helpers ──────────────────────────────────────────────────────
+
+    private static boolean onTick(BigDecimal price, BigDecimal tick) {
+        return price.remainder(tick).signum() == 0;
+    }
 
     private OrderSide parseSide(char c) {
         return switch (c) {

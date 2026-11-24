@@ -62,5 +62,9 @@ EXPOSE 9876 8080
 # store/ and logs/ are written at runtime – declare as volumes
 VOLUME ["/app/store", "/app/logs", "/app/config"]
 
+# Admin API binds to loopback by default; inside the container it must listen on all
+# interfaces so the published port is reachable. Set ADMIN_TOKEN at run time.
+ENV ADMIN_BIND=0.0.0.0
+
 ENTRYPOINT ["java", "-jar", "/app/fix-simulator.jar"]
 CMD ["/app/config/server.cfg", "/app/config/instruments.yml"]

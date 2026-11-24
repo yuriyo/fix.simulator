@@ -14,7 +14,11 @@ import java.util.stream.Collectors;
  * Central matching engine.
  *
  * <p>Holds one {@link OrderBook} per symbol and a shared {@link MarketState}.
- * All incoming order operations (new / cancel-replace / cancel) flow through here.
+ * All incoming order operations (new / cancel-replace / cancel / quote) flow through here.
+ *
+ * <p><b>Concurrency:</b> every compound operation on a symbol runs while holding that
+ * symbol's book monitor ({@code synchronized (book)}), so match-then-rest, check-then-cancel
+ * and quote replacement are atomic with respect to other operations on the same symbol.
  *
  * <p>The engine is stateless regarding FIX sessions – it works with plain {@link Order}
  * objects and returns {@link Execution} lists that callers translate to FIX messages.
@@ -23,6 +27,11 @@ public class MatchingEngine {
 
     private static final Logger log = LoggerFactory.getLogger(MatchingEngine.class);
 
+    /** In-memory history limits. The oldest records are evicted first. */
+    static final int TRADE_LOG_CAP     = 10_000;
+    static final int EXECUTION_LOG_CAP = 100_000;
+    static final int ORDER_HISTORY_CAP = 10_000;
+
     private final ConcurrentHashMap<String, OrderBook> books = new ConcurrentHashMap<>();
     private final MarketState marketState = new MarketState();
 
@@ -30,14 +39,23 @@ public class MatchingEngine {
     private volatile EventBus               eventBus;
     private volatile InstrumentStateManager stateManager;
 
-    /** Master order register: every order ever submitted, keyed by internalId. */
+    /** Order register keyed by internalId. Terminal orders are evicted beyond ORDER_HISTORY_CAP. */
     private final ConcurrentHashMap<Long, Order> allOrders = new ConcurrentHashMap<>();
 
-    /** Trade log: one record per matched aggressor fill. */
-    private final List<Map<String, Object>> tradeLog = new ArrayList<>();
+    /** Insertion order of {@link #allOrders} keys. Guarded by its own monitor. */
+    private final ArrayDeque<Long> orderHistory = new ArrayDeque<>();
 
-    /** Execution log: every execution report (NEW, FILL, PARTIAL_FILL, CANCELLED, etc.). */
-    private final List<Map<String, Object>> executionLog = new ArrayList<>();
+    /**
+     * Resting quote orders per {@code symbol|sessionId}, so a new quote can withdraw the previous one.
+     * Each key is only touched while holding the lock of its symbol's book.
+     */
+    private final ConcurrentHashMap<String, List<Order>> restingQuotes = new ConcurrentHashMap<>();
+
+    /** Trade log: one record per matched aggressor fill. Guarded by its own monitor. */
+    private final LinkedList<Map<String, Object>> tradeLog = new LinkedList<>();
+
+    /** Execution log: every execution report. Guarded by its own monitor. */
+    private final LinkedList<Map<String, Object>> executionLog = new LinkedList<>();
 
     // ──────────────────────────────────────────────────────────────────────
     //  Admin wiring (optional setters – no constructor change keeps tests green)
@@ -58,7 +76,8 @@ public class MatchingEngine {
             });
         }
     }
-    public void setStateManager(InstrumentStateManager sm)     { this.stateManager = sm; }
+
+    public void setStateManager(InstrumentStateManager sm) { this.stateManager = sm; }
 
     // ──────────────────────────────────────────────────────────────────────
     //  Symbol management
@@ -91,30 +110,31 @@ public class MatchingEngine {
             return List.of(rej);
         }
 
-        // Register in master order map
-        allOrders.put(order.getInternalId(), order);
+        synchronized (book) {
+            registerOrder(order);
 
-        List<Execution> results = new ArrayList<>();
+            List<Execution> results = new ArrayList<>();
 
-        // Ack the new order
-        Execution newExec = new Execution(order, 0, null, Execution.ExecType.NEW);
-        logExecution(newExec);
-        results.add(newExec);
+            // Ack the new order
+            Execution newExec = new Execution(order, 0, null, Execution.ExecType.NEW);
+            logExecution(newExec);
+            results.add(newExec);
 
-        switch (order.getType()) {
-            case LIMIT -> results.addAll(processLimit(book, order));
-            case MARKET -> results.addAll(processMarket(book, order));
-            case STOP, STOP_LIMIT -> processStop(book, order, results);
-            default -> {
-                order.setStatus(OrderStatus.REJECTED);
-                Execution rej = new Execution(order, 0, null, Execution.ExecType.REJECTED);
-                logExecution(rej);
-                results.add(rej);
+            switch (order.getType()) {
+                case LIMIT -> results.addAll(processLimit(book, order));
+                case MARKET -> results.addAll(processMarket(book, order));
+                case STOP, STOP_LIMIT -> processStop(book, order, results);
+                default -> {
+                    order.setStatus(OrderStatus.REJECTED);
+                    Execution rej = new Execution(order, 0, null, Execution.ExecType.REJECTED);
+                    logExecution(rej);
+                    results.add(rej);
+                }
             }
-        }
 
-        publishOrderEvent(order);
-        return results;
+            publishOrderEvent(order);
+            return results;
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -132,34 +152,36 @@ public class MatchingEngine {
         if (book == null)
             return reject(origClOrdId, "Unknown symbol");
 
-        Order order = book.findByClientKey(sessionId, origClOrdId);
-        if (order == null)
-            return reject(origClOrdId, "Order not found");
+        synchronized (book) {
+            Order order = book.findByClientKey(sessionId, origClOrdId);
+            if (order == null)
+                return reject(origClOrdId, "Order not found");
 
-        if (order.getStatus() == OrderStatus.FILLED ||
-                order.getStatus() == OrderStatus.CANCELLED) {
-            return reject(origClOrdId, "Order already done");
+            if (order.getStatus() == OrderStatus.FILLED ||
+                    order.getStatus() == OrderStatus.CANCELLED) {
+                return reject(origClOrdId, "Order already done");
+            }
+
+            // Remove from book
+            if (order.getType() == OrderType.LIMIT) {
+                book.removeLimit(order);
+            } else {
+                book.removeStop(order);
+            }
+
+            book.deindex(order);
+            order.cancel();
+
+            publishOrderEvent(order);
+            Execution cancelExec = new Execution(order, 0, null, Execution.ExecType.CANCELLED);
+            logExecution(cancelExec);
+
+            // Mark book dirty so the UI reflects the removed order on next tick
+            EventBus bus = this.eventBus;
+            if (bus != null) bus.markBookDirty(symbol);
+
+            return List.of(cancelExec);
         }
-
-        // Remove from book
-        if (order.getType() == OrderType.LIMIT) {
-            book.removeLimit(order);
-        } else {
-            book.removeStop(order);
-        }
-
-        book.deindex(order);
-        order.cancel();
-
-        publishOrderEvent(order);
-        Execution cancelExec = new Execution(order, 0, null, Execution.ExecType.CANCELLED);
-        logExecution(cancelExec);
-
-        // Mark book dirty so the UI reflects the removed order on next tick
-        EventBus bus = this.eventBus;
-        if (bus != null) bus.markBookDirty(symbol);
-
-        return List.of(cancelExec);
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -178,33 +200,35 @@ public class MatchingEngine {
         if (book == null)
             return reject(origClOrdId, "Unknown symbol");
 
-        Order existing = book.findByClientKey(sessionId, origClOrdId);
-        if (existing == null)
-            return reject(origClOrdId, "Original order not found");
+        synchronized (book) {
+            Order existing = book.findByClientKey(sessionId, origClOrdId);
+            if (existing == null)
+                return reject(origClOrdId, "Original order not found");
 
-        if (existing.getStatus() == OrderStatus.FILLED ||
-                existing.getStatus() == OrderStatus.CANCELLED) {
-            return reject(origClOrdId, "Cannot replace completed order");
+            if (existing.getStatus() == OrderStatus.FILLED ||
+                    existing.getStatus() == OrderStatus.CANCELLED) {
+                return reject(origClOrdId, "Cannot replace completed order");
+            }
+
+            // Remove the old order
+            if (existing.getType() == OrderType.LIMIT) {
+                book.removeLimit(existing);
+            } else {
+                book.removeStop(existing);
+            }
+            book.deindex(existing);
+            existing.cancel(); // mark old order cancelled
+
+            List<Execution> results = new ArrayList<>();
+            // Ack REPLACE on existing order
+            Execution replacedExec = new Execution(existing, 0, null, Execution.ExecType.REPLACED);
+            logExecution(replacedExec);
+            results.add(replacedExec);
+
+            // Process the replacement order as new (newOrder logs its own executions)
+            results.addAll(newOrder(replacement));
+            return results;
         }
-
-        // Remove the old order
-        if (existing.getType() == OrderType.LIMIT) {
-            book.removeLimit(existing);
-        } else {
-            book.removeStop(existing);
-        }
-        book.deindex(existing);
-        existing.cancel(); // mark old order cancelled
-
-        List<Execution> results = new ArrayList<>();
-        // Ack REPLACE on existing order
-        Execution replacedExec = new Execution(existing, 0, null, Execution.ExecType.REPLACED);
-        logExecution(replacedExec);
-        results.add(replacedExec);
-
-        // Process the replacement order as new (newOrder logs its own executions)
-        results.addAll(newOrder(replacement));
-        return results;
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -213,10 +237,13 @@ public class MatchingEngine {
 
     /**
      * Update market state from a client Quote message.
-     * The quote is inserted as resting limit orders on both sides so it
-     * participates in matching.
      *
-     * @return execution list from any immediate matches (unlikely for quotes, but possible).
+     * <p>A quote replaces the same session's previous quote on this symbol: the earlier
+     * resting bid and ask are withdrawn first. The new bid and ask are then matched like
+     * aggressive limit orders. Any unfilled remainder rests in the book. Fills are
+     * recorded and trigger stops exactly as engine-driven fills do.
+     *
+     * @return execution list from any immediate matches.
      */
     public List<Execution> onQuote(String sessionId, String symbol,
                                    BigDecimal bidPrice, long bidSize,
@@ -229,29 +256,24 @@ public class MatchingEngine {
         if (book == null) return Collections.emptyList();
 
         List<Execution> fills = new ArrayList<>();
+        synchronized (book) {
+            String key = symbol + "|" + sessionId;
+            withdrawQuotes(book, key);
 
-        // Insert bid as a resting BUY limit order
-        if (bidPrice != null && bidSize > 0) {
-            Order bid = new Order(sessionId, "q-bid-" + quoteId, null, symbol,
-                    OrderSide.BUY, OrderType.LIMIT, TimeInForce.GTC,
-                    bidSize, bidPrice, null);
-            book.addLimitOrder(bid);
-            fills.addAll(book.match(bid));
-            if (bid.getOpenQty() > 0)
-                book.addLimitOrder(bid); // re-add any remainder
+            if (bidPrice != null && bidSize > 0) {
+                Order bid = new Order(sessionId, "q-bid-" + quoteId, null, symbol,
+                        OrderSide.BUY, OrderType.LIMIT, TimeInForce.GTC,
+                        bidSize, bidPrice, null);
+                fills.addAll(placeQuoteOrder(book, key, bid));
+            }
+
+            if (askPrice != null && askSize > 0) {
+                Order ask = new Order(sessionId, "q-ask-" + quoteId, null, symbol,
+                        OrderSide.SELL, OrderType.LIMIT, TimeInForce.GTC,
+                        askSize, askPrice, null);
+                fills.addAll(placeQuoteOrder(book, key, ask));
+            }
         }
-
-        // Insert ask as a resting SELL limit order
-        if (askPrice != null && askSize > 0) {
-            Order ask = new Order(sessionId, "q-ask-" + quoteId, null, symbol,
-                    OrderSide.SELL, OrderType.LIMIT, TimeInForce.GTC,
-                    askSize, askPrice, null);
-            book.addLimitOrder(ask);
-            fills.addAll(book.match(ask));
-            if (ask.getOpenQty() > 0)
-                book.addLimitOrder(ask);
-        }
-
         return fills;
     }
 
@@ -266,7 +288,7 @@ public class MatchingEngine {
     /** All registered symbols. */
     public Set<String> getSymbols() { return Collections.unmodifiableSet(books.keySet()); }
 
-    /** Find any order (active or historical) by its internal server-assigned id. */
+    /** Find any order (active or retained history) by its internal server-assigned id. */
     public Order findOrderById(long id) { return allOrders.get(id); }
 
     /** Trade log (one record per aggressor fill). Filterable by symbol. */
@@ -281,8 +303,10 @@ public class MatchingEngine {
 
     /** Symbols that have at least one completed trade. */
     public Set<String> getTradedSymbols() {
-        Set<String> s = new java.util.LinkedHashSet<>();
-        for (Map<String, Object> t : tradeLog) s.add((String) t.get("symbol"));
+        Set<String> s = new LinkedHashSet<>();
+        synchronized (tradeLog) {
+            for (Map<String, Object> t : tradeLog) s.add((String) t.get("symbol"));
+        }
         return Collections.unmodifiableSet(s);
     }
 
@@ -313,13 +337,12 @@ public class MatchingEngine {
     /**
      * Orders that have reached a terminal state (FILLED, CANCELLED, REJECTED)
      * for a given symbol (or all symbols when {@code symbol} is {@code null}).
+     * Only retained history is returned; see {@link #ORDER_HISTORY_CAP}.
      */
     public List<Order> getCompletedOrders(String symbol) {
         return allOrders.values().stream()
                 .filter(o -> symbol == null || o.getSymbol().equals(symbol))
-                .filter(o -> o.getStatus() == OrderStatus.FILLED
-                          || o.getStatus() == OrderStatus.CANCELLED
-                          || o.getStatus() == OrderStatus.REJECTED)
+                .filter(MatchingEngine::isTerminal)
                 .collect(Collectors.toList());
     }
 
@@ -352,14 +375,42 @@ public class MatchingEngine {
         // Try to match immediately
         fills.addAll(book.match(order));
 
-        // If it's IOC and there's leftover – already cancelled inside match()
-        // If it's canceled post-match, do not add to book
+        // If it's canceled post-match (IOC / FOK remainder), do not add to book
         if (order.getStatus() != OrderStatus.CANCELLED && order.getOpenQty() > 0) {
             book.addLimitOrder(order);
         }
 
         afterFills(book, order, fills);
         return fills;
+    }
+
+    /**
+     * Match one quote side, rest any remainder exactly once, and run the fill pipeline.
+     * The quote order is not in the book while it matches, so it cannot match itself or be
+     * inserted twice.
+     */
+    private List<Execution> placeQuoteOrder(OrderBook book, String key, Order quote) {
+        List<Execution> fills = new ArrayList<>(book.match(quote));
+        if (quote.getOpenQty() > 0) {
+            book.addLimitOrder(quote);
+            restingQuotes.computeIfAbsent(key, k -> new ArrayList<>()).add(quote);
+        }
+        afterFills(book, quote, fills);
+        return fills;
+    }
+
+    /** Withdraw this session's previously resting quote orders on the symbol. Caller holds the book lock. */
+    private void withdrawQuotes(OrderBook book, String key) {
+        List<Order> previous = restingQuotes.remove(key);
+        if (previous == null) return;
+        for (Order q : previous) {
+            if (q.getStatus() != OrderStatus.NEW && q.getStatus() != OrderStatus.PARTIALLY_FILLED) continue;
+            book.removeLimit(q);
+            book.deindex(q);
+            q.cancel();
+        }
+        EventBus bus = this.eventBus;
+        if (bus != null) bus.markBookDirty(book.getSymbol());
     }
 
     private List<Execution> processMarket(OrderBook book, Order order) {
@@ -389,39 +440,26 @@ public class MatchingEngine {
     }
 
     /**
-     * Called after fills to update last price, re-check pending stops,
-     * log executions and trades, and publish WebSocket events.
+     * Post-match pipeline for one aggressor's fills. Caller holds the book lock.
+     *
+     * <ol>
+     *   <li>Log this call's own fills and trades (before stops run, so nested calls never log them again).</li>
+     *   <li>Update last price from the aggressor's fills and trigger any stops it crossed.
+     *       Triggered stops run their own pipeline, and their fills are appended to {@code fills}.</li>
+     * </ol>
      *
      * @param aggressor the incoming order that caused the match
-     * @param fills     all executions produced by matching
+     * @param fills     executions produced by matching; stop fills are appended
      */
     private void afterFills(OrderBook book, Order aggressor, List<Execution> fills) {
         String symbol = aggressor.getSymbol();
-
-        // Find last fill price from aggressor fills only
-        BigDecimal lastFillPx = null;
-        for (Execution e : fills) {
-            if (e.getOrder() == aggressor && e.getPrice() != null) lastFillPx = e.getPrice();
-        }
-        if (lastFillPx != null) {
-            marketState.updateLastPrice(symbol, lastFillPx);
-            // Trigger any stops
-            List<Order> triggered = book.checkStops(lastFillPx);
-            for (Order stop : triggered) {
-                fills.addAll(processTrigger(book, stop));
-            }
-        }
-
-        // Log executions and publish WS events
         EventBus bus = this.eventBus;
-        boolean hasFills = false;
+
         for (Execution e : fills) {
             if (e.getPrice() != null && e.getQty() > 0
                     && (e.getExecType() == Execution.ExecType.FILL
                      || e.getExecType() == Execution.ExecType.PARTIAL_FILL)) {
-                // Log every fill execution (both aggressor and passive sides)
                 logExecution(e);
-                hasFills = true;
 
                 // Publish one trade event per aggressor fill (not per passive)
                 if (e.getOrder() == aggressor) {
@@ -431,7 +469,7 @@ public class MatchingEngine {
                     tradeMap.put("price",        e.getPrice().toPlainString());
                     tradeMap.put("qty",          e.getQty());
                     tradeMap.put("aggressorSide", aggressor.getSide().name());
-                    synchronized (tradeLog) { tradeLog.add(tradeMap); }
+                    appendTrade(tradeMap);
 
                     if (bus != null) {
                         Map<String, Object> wsMsg = new LinkedHashMap<>(tradeMap);
@@ -441,8 +479,27 @@ public class MatchingEngine {
                 }
             }
         }
+
+        BigDecimal lastFillPx = null;
+        for (Execution e : fills) {
+            if (e.getOrder() == aggressor && e.getPrice() != null) lastFillPx = e.getPrice();
+        }
+        if (lastFillPx != null) {
+            marketState.updateLastPrice(symbol, lastFillPx);
+            for (Order stop : book.checkStops(lastFillPx)) {
+                fills.addAll(processTrigger(book, stop));
+            }
+        }
+
         // Mark book dirty; the tick thread will snapshot levels once per 200 ms.
         if (bus != null) bus.markBookDirty(symbol);
+    }
+
+    private void appendTrade(Map<String, Object> trade) {
+        synchronized (tradeLog) {
+            tradeLog.addLast(trade);
+            while (tradeLog.size() > TRADE_LOG_CAP) tradeLog.removeFirst();
+        }
     }
 
     /** Append a single execution to the execution log. */
@@ -459,8 +516,29 @@ public class MatchingEngine {
         m.put("sessionId", e.getOrder().getSessionId());
         m.put("orderId",   e.getOrder().getInternalId());
         synchronized (executionLog) {
-            executionLog.add(m);
+            executionLog.addLast(m);
+            while (executionLog.size() > EXECUTION_LOG_CAP) executionLog.removeFirst();
         }
+    }
+
+    /** Add an order to the register and evict the oldest terminal orders beyond the cap. */
+    private void registerOrder(Order order) {
+        allOrders.put(order.getInternalId(), order);
+        synchronized (orderHistory) {
+            orderHistory.addLast(order.getInternalId());
+            while (orderHistory.size() > ORDER_HISTORY_CAP) {
+                Long oldest = orderHistory.peekFirst();
+                Order candidate = allOrders.get(oldest);
+                if (candidate != null && !isTerminal(candidate)) break; // never evict live orders
+                orderHistory.pollFirst();
+                allOrders.remove(oldest);
+            }
+        }
+    }
+
+    private static boolean isTerminal(Order o) {
+        OrderStatus s = o.getStatus();
+        return s == OrderStatus.FILLED || s == OrderStatus.CANCELLED || s == OrderStatus.REJECTED;
     }
 
     /**
@@ -520,8 +598,10 @@ public class MatchingEngine {
     public void setAdminBookLevel(String symbol, OrderSide side, BigDecimal price, long qty) {
         OrderBook book = books.get(symbol);
         if (book == null) return;
-        book.setAdminLevel(side, price, qty);
-        publishBookUpdate(symbol, book);
+        synchronized (book) {
+            book.setAdminLevel(side, price, qty);
+            publishBookUpdate(symbol, book);
+        }
     }
 
     private void publishBookUpdate(String symbol, OrderBook book) {
