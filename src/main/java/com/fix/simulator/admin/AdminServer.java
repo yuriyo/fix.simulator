@@ -124,7 +124,7 @@ public class AdminServer {
             // No CORS plugin: the UI is served from this origin, so cross-origin access is denied.
 
             // Serve React build output when present
-            Path uiDist = Path.of("admin-ui/dist");
+            Path uiDist = Path.of(System.getProperty("admin.ui", "admin-ui/dist"));
             if (Files.exists(uiDist)) {
                 config.staticFiles.add(sf -> {
                     sf.directory  = uiDist.toAbsolutePath().toString();
@@ -157,14 +157,12 @@ public class AdminServer {
                 // renders existing resting orders immediately on (re)connect.
                 for (String sym : engine.getSymbols()) {
                     var bk = engine.getBook(sym);
-                    if (bk != null) {
-                        Map<String, Object> bookEvt = new LinkedHashMap<>();
-                        bookEvt.put("type",   "book_update");
-                        bookEvt.put("symbol", sym);
-                        bookEvt.put("bids",   bk.getBidLevels(100));
-                        bookEvt.put("asks",   bk.getAskLevels(100));
-                        ctx.send(mapper.writeValueAsString(bookEvt));
-                    }
+                    Map<String, Object> bookEvt = new LinkedHashMap<>();
+                    bookEvt.put("type",   "book_update");
+                    bookEvt.put("symbol", sym);
+                    bookEvt.put("bids",   bk.getBidLevels(100));
+                    bookEvt.put("asks",   bk.getAskLevels(100));
+                    ctx.send(mapper.writeValueAsString(bookEvt));
                 }
             });
             ws.onClose(ctx -> {
@@ -234,7 +232,7 @@ public class AdminServer {
         app.post("/api/instruments/{symbol}/state", ctx -> {
             String symbol  = ctx.pathParam("symbol");
             @SuppressWarnings("unchecked")
-            Map<String, String> body = ctx.bodyAsClass(Map.class);
+            Map<String, String> body = jsonObject(ctx);
             String stateStr = body == null ? null : body.get("state");
             if (stateStr == null) { ctx.status(400).json(error("body must contain 'state'")); return; }
             try {
@@ -278,7 +276,7 @@ public class AdminServer {
         app.post("/api/sessions/{compId}/reset-seq", ctx -> {
             String compId = ctx.pathParam("compId");
             @SuppressWarnings("unchecked")
-            Map<String, Object> body = ctx.bodyAsClass(Map.class);
+            Map<String, Object> body = jsonObject(ctx);
             if (body == null) { ctx.status(400).json(error("body required")); return; }
             int seqIn  = parseInt(body.get("seqIn")  != null ? body.get("seqIn").toString()  : null, -1);
             int seqOut = parseInt(body.get("seqOut") != null ? body.get("seqOut").toString() : null, -1);
@@ -309,7 +307,7 @@ public class AdminServer {
             String symbol = ctx.pathParam("symbol");
             if (!engine.hasSymbol(symbol)) { ctx.status(404).json(error("Unknown symbol: " + symbol)); return; }
             @SuppressWarnings("unchecked")
-            Map<String, Object> body = ctx.bodyAsClass(Map.class);
+            Map<String, Object> body = jsonObject(ctx);
             if (body == null) { ctx.status(400).json(error("body required")); return; }
             String sideStr  = body.get("side")  != null ? body.get("side").toString()  : null;
             String priceStr = body.get("price") != null ? body.get("price").toString() : null;
@@ -424,21 +422,7 @@ public class AdminServer {
             dash.put("tradeCount",   tradeCount);
             dash.put("execCount",    execCount);
 
-            // -- Order status breakdown (for donut chart) --
-            Map<String, Integer> statusBreakdown = new LinkedHashMap<>();
-            statusBreakdown.put("NEW", 0);
-            statusBreakdown.put("PARTIALLY_FILLED", 0);
-            statusBreakdown.put("FILLED", 0);
-            statusBreakdown.put("CANCELLED", 0);
-            statusBreakdown.put("REJECTED", 0);
-            for (Map<String, Object> ex : engine.getExecutionLog(null, null)) {
-                String et = (String) ex.get("execType");
-                if ("NEW".equals(et) || "FILL".equals(et) || "PARTIAL_FILL".equals(et)
-                        || "CANCELLED".equals(et) || "REJECTED".equals(et) || "REPLACED".equals(et)) {
-                    // We want order-level status, not exec-level.  Approximate from last exec per orderId.
-                }
-            }
-            // Better approach: scan allOrders for accurate counts
+            // -- Order status breakdown (for donut chart), counted per order --
             Map<String, Long> ordersByStatus = new LinkedHashMap<>();
             for (OrderStatus st : OrderStatus.values()) ordersByStatus.put(st.name(), 0L);
             // Walk all tracked orders
@@ -467,8 +451,7 @@ public class AdminServer {
                 List<Map<String, Object>> symTrades = engine.getTradeLog(sym);
                 long totalQty = 0;
                 for (Map<String, Object> t : symTrades) {
-                    Object q = t.get("qty");
-                    if (q instanceof Number) totalQty += ((Number) q).longValue();
+                    totalQty += ((Number) t.get("qty")).longValue();
                 }
                 Map<String, Object> sv = new LinkedHashMap<>();
                 sv.put("trades", symTrades.size());
@@ -536,6 +519,19 @@ public class AdminServer {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    /**
+     * Parse the request body as a JSON object. Returns {@code null} for a missing, malformed or
+     * non-object body (for example the literal {@code null}), so callers can answer 400 instead of 500.
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> Map<String, T> jsonObject(io.javalin.http.Context ctx) {
+        try {
+            return ctx.bodyAsClass(Map.class);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private String extractCompId(String body) {
         try {
@@ -559,7 +555,7 @@ public class AdminServer {
         m.put("totalQty",   o.getTotalQty());
         m.put("limitPrice", o.getLimitPrice()  != null ? o.getLimitPrice().toPlainString()  : null);
         m.put("stopPrice",  o.getStopPrice()   != null ? o.getStopPrice().toPlainString()   : null);
-        m.put("createTime", o.getCreateTime() != null ? o.getCreateTime().toString() : null);
+        m.put("createTime", o.getCreateTime().toString());
         return m;
     }
 

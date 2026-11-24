@@ -100,7 +100,6 @@ public class ClientRegistry {
 
         // Regex match in blocked
         for (String pattern : blocked) {
-            if (pattern.equals(compId)) continue; // already handled above
             try {
                 if (java.util.regex.Pattern.matches(pattern, compId)) return false;
             } catch (java.util.regex.PatternSyntaxException ignored) {
@@ -111,7 +110,6 @@ public class ClientRegistry {
         // Regex match in allowed (only when allowed list is non-empty)
         if (!allowed.isEmpty()) {
             for (String pattern : allowed) {
-                if (pattern.equals(compId)) continue;
                 try {
                     if (java.util.regex.Pattern.matches(pattern, compId)) return true;
                 } catch (java.util.regex.PatternSyntaxException ignored) {}

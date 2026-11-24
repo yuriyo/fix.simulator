@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - When showing a code extract or file contents to the user, always include line numbers.
 
+## Companion project
+
+`../fix.testharness` (`git@github.com:yuriyo/fix.testharness.git`) is a QuickFIX/J client that drives this simulator with YAML scenarios from `scenarios/`. It has its own `build.sh` and `play_scenario.sh`. Its README says FIX 4.4, but `config/client.cfg` and `pom.xml` use FIX 4.2, so trust the config. Run it against a live simulator on `localhost:9876` (see its README for `FIX_HOST` / `FIX_PORT`).
+
 ## Commands
 
 Java 17 + Maven (3.8+). Offline builds work once dependencies are cached (`mvn -o`).
