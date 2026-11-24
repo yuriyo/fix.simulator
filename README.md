@@ -244,6 +244,25 @@ mvn test
 
 Mockito 5.8 is used for handler-layer tests; engine and book tests use real objects.
 
+### Code coverage (JaCoCo)
+
+`mvn test` also runs JaCoCo and writes the coverage report to `target/site/jacoco/`:
+
+```bash
+mvn test                              # runs the tests and generates the report
+open target/site/jacoco/index.html    # macOS: browse the HTML report
+```
+
+Other useful files in `target/site/jacoco/`:
+
+| File | Use |
+|---|---|
+| `index.html` | Interactive report: line, branch and method coverage per package and class |
+| `jacoco.csv` | Flat per-class counters, for scripts |
+| `jacoco.xml` | Per-line hit counts, for tools that read JaCoCo XML |
+
+Coverage numbers are shown as missed vs covered. Branch coverage is the closest measure of condition coverage: JaCoCo reports each `if`/`&&`/`||` outcome as a separate branch.
+
 ---
 
 ## Performance Notes
