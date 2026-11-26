@@ -1,0 +1,22 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Developer toolbox: JDK 17, Maven 3.9 and Node 20 in one image.
+#
+# Nothing else needs to be installed on the host. build.sh runs tests, the UI
+# build and a shell inside this image, with the repository mounted at /src.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM maven:3.9-eclipse-temurin-17
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Caches and home directory for the non-root user that build.sh runs as.
+# A named volume copies these permissions on first use, so the user can write to them.
+RUN mkdir -p /m2 /tmp/home && chmod 777 /m2 /tmp/home
+
+WORKDIR /src
+
+# Run the requested command directly; the Maven image's entrypoint adds a warning and nothing we need.
+ENTRYPOINT []

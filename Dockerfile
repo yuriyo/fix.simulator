@@ -9,9 +9,11 @@ WORKDIR /build
 COPY pom.xml .
 RUN mvn dependency:go-offline -q
 
-# Copy source and build
+# Copy source and build. Tests run here, so an image is only produced from code that passes.
+# Pass --build-arg SKIP_TESTS=true for a quick rebuild while iterating.
+ARG SKIP_TESTS=false
 COPY src ./src
-RUN mvn package -q -DskipTests
+RUN mvn -B -q package -DskipTests=${SKIP_TESTS}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 2 – Build the React admin UI
@@ -32,7 +34,7 @@ RUN npm run build
 FROM eclipse-temurin:17-jre
 
 LABEL maintainer="FIX Exchange Simulator"
-LABEL description="FIX 4.4 exchange simulator with order matching engine"
+LABEL description="FIX 4.2 exchange simulator with order matching engine"
 
 # Create non-root user
 RUN groupadd -r fix && useradd -r -g fix fix

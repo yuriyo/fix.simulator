@@ -12,35 +12,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-Java 17 + Maven (3.8+). Offline builds work once dependencies are cached (`mvn -o`).
+**Docker only.** The host needs only the `docker` CLI. Java, Maven and Node run in containers, so do not run `mvn`, `npm` or `java` on the host. Use `build.sh`:
 
 ```bash
-# Build the fat jar (target/fix-simulator-1.0.0-SNAPSHOT.jar)
-mvn clean package -q
-
-# Run locally (from repo root: the admin UI is loaded from ./admin-ui/dist relative to CWD)
-java -jar target/fix-simulator-1.0.0-SNAPSHOT.jar config/server.cfg config/instruments.yml
-java -Dadmin.port=8080 -jar target/fix-simulator-1.0.0-SNAPSHOT.jar   # admin port default 8080
-
-# Tests (JUnit 5 + Mockito)
-mvn test
-mvn test -Dtest=OrderTest                                    # one test class
-mvn test -Dtest='MatchingEngineTest$NewOrderBasic'           # one @Nested group
+./build.sh test                                               # all JUnit tests + JaCoCo report, in the toolbox container
+MVN_ARGS="-Dtest=OrderTest" ./build.sh test                   # one test class
+MVN_ARGS="-Dtest='com.fix.simulator.defects.**'" ./build.sh test   # regression tests for D1–D8 (they assert correct behaviour)
+./build.sh ui-build                                           # admin UI into admin-ui/dist, in the toolbox container
+./build.sh shell                                              # shell with JDK 17, Maven, Node 20 (repo at /src)
+./build.sh build --version X                                  # compile, test, build UI, make image fix-simulator:X
+./build.sh run                                                # start container fix-simulator (admin token printed)
+./build.sh build | push | build-push [--version X] [--registry R] [--no-cache]
 ```
 
-`src/test/java/com/fix/simulator/defects/` holds regression tests for defects D1–D8 (see below). They assert correct behaviour and all pass. Run only them with `mvn test -Dtest='com.fix.simulator.defects.**'`.
+The toolbox image is `Dockerfile.dev`. The production image is the multi-stage `Dockerfile`: Maven build with tests (`SKIP_TESTS=true` skips them for quick iteration), Vite build, and a JRE runtime that runs as a non-root user.
 
-Admin UI (React + Vite, `admin-ui/`):
-
-```bash
-cd admin-ui && npm install
-npm run dev      # Vite dev server; proxies /api and WebSocket to localhost:8080 (run the JVM first)
-npm run build    # writes admin-ui/dist, which the JVM serves as static files
-```
+The Vite dev server is not part of the Docker workflow. Check UI changes with `ui-build`, then package them with `build`.
 
 There is no lint configuration in the repo (no ESLint, Checkstyle or similar), and no frontend tests.
-
-Docker: `./build.sh build | push | build-push [--version X] [--registry R] [--no-cache]`. The Dockerfile is multi-stage (Maven build, Vite build, JRE runtime) and runs as a non-root user.
 
 ## Architecture
 

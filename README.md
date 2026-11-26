@@ -12,7 +12,7 @@ A test exchange for FIX clients. It accepts FIX 4.2 connections over TCP, matche
 
 1. [Prerequisites](#1-prerequisites)
 2. [Quick start with Docker (recommended)](#2-quick-start-with-docker-recommended)
-3. [Run without Docker](#3-run-without-docker)
+3. [Develop and test in Docker](#3-develop-and-test-in-docker)
 4. [Connect a FIX client](#4-connect-a-fix-client)
 5. [Configuration](#5-configuration)
 6. [Admin UI and API](#6-admin-ui-and-api)
@@ -28,19 +28,13 @@ A test exchange for FIX clients. It accepts FIX 4.2 connections over TCP, matche
 
 ## 1. Prerequisites
 
-| For | You need |
-|---|---|
-| Docker route | Docker (Desktop or Engine). Nothing else. |
-| Local route | JDK 17, Maven 3.8 or newer, and Node.js 20 or newer if you want the web UI |
-| Build the image | Docker, and this repository |
+**Docker is the only thing you install.** Java, Maven and Node.js run inside containers. Nothing about the toolchain needs to be installed on your machine.
 
-Check your versions:
+Check that Docker works:
 
 ```bash
 docker --version
-java -version      # must report 17
-mvn -version       # 3.8 or newer
-node --version     # 20 or newer (only for the web UI)
+docker info > /dev/null && echo "Docker is running"
 ```
 
 Ports used:
@@ -66,25 +60,18 @@ This creates a local image named `fix-simulator:1.0.0`. It needs no registry. Th
 
 ### Step 2: Start the simulator
 
-Choose an admin token. It protects every change made through the admin API and UI:
-
 ```bash
-export ADMIN_TOKEN="$(openssl rand -hex 16)"
-echo "Admin token: $ADMIN_TOKEN"   # keep this; you will need it in the UI
-
-docker run -d --name fix-simulator \
-  -p 9876:9876 -p 8080:8080 \
-  -e ADMIN_TOKEN="$ADMIN_TOKEN" \
-  -v fix-store:/app/store \
-  -v fix-logs:/app/logs \
-  fix-simulator:1.0.0
+./build.sh run
 ```
 
-What each option does:
+This starts the container `fix-simulator` and prints the admin token. Keep the token: the admin UI asks for it. To choose the token yourself, set it first: `ADMIN_TOKEN=my-token ./build.sh run`.
 
-- `-p 9876:9876` exposes the FIX port. `-p 8080:8080` exposes the admin UI.
-- `-e ADMIN_TOKEN=...` sets the admin token. If you leave it out, the simulator generates one and prints it in the logs (`docker logs fix-simulator | grep "generated one"`). A fixed token is easier to work with.
-- `-v fix-store:/app/store` and `-v fix-logs:/app/logs` keep FIX sequence numbers and message logs in named Docker volumes. They survive container restarts and removal.
+What the container uses:
+
+- Ports `9876` (FIX) and `8080` (admin UI and API) are published to your machine.
+- Named volumes `fix-store` and `fix-logs` keep FIX sequence numbers and message logs. They survive restarts and removal.
+
+To start the image without `build.sh`, run `docker run` with the same ports, `-e ADMIN_TOKEN=...` and the two volumes.
 
 ### Step 3: Check that it is running
 
@@ -136,26 +123,29 @@ REGISTRY=registry.example.com IMAGE_PREFIX=team ./build.sh build-push --version 
 
 ---
 
-## 3. Run without Docker
+## 3. Develop and test in Docker
 
-Use this when you want to change the code or run it directly on your machine.
+Everything runs in containers. `build.sh` calls only `docker`:
+
+| Command | What it does |
+|---|---|
+| `./build.sh build --version X` | Compiles the server, runs all tests, builds the admin UI, and makes the image `fix-simulator:X`. A failing test stops the build. |
+| `./build.sh test` | Runs all tests and writes the coverage report to `target/site/jacoco/` |
+| `./build.sh ui-build` | Builds the admin UI into `admin-ui/dist` |
+| `./build.sh shell` | Opens a shell with JDK 17, Maven and Node 20, with the repository at `/src` |
+| `./build.sh run` | Starts the simulator container |
+
+The first run of each command builds a developer image (`fix-simulator-dev`) and downloads dependencies. Later runs reuse them from the Docker volume `fix-simulator-m2`.
+
+Pass extra Maven options with `MVN_ARGS`, for example one test class:
 
 ```bash
-# 1. Build the server jar
-mvn clean package -q
-
-# 2. (Optional) Build the web UI. Skip this and the simulator still runs,
-#    but the browser UI will not be served.
-(cd admin-ui && npm install && npm run build)
-
-# 3. Set the admin token and start from the repository root
-export ADMIN_TOKEN="choose-a-token"
-java -jar target/fix-simulator-1.0.0-SNAPSHOT.jar config/server.cfg config/instruments.yml
+MVN_ARGS="-Dtest=OrderTest" ./build.sh test
 ```
 
-The jar must be started from the repository root, because the web UI is loaded from `admin-ui/dist` relative to the current folder.
+To change the code: edit files on your machine, then run `./build.sh test`. Build output in `target/` and `admin-ui/dist/` appears on your machine, owned by you.
 
-To change the admin port: `java -Dadmin.port=8081 -jar ...`.
+To change the port of the admin UI, edit the `-p` option in `build.sh` (`run` command) or use `docker run` directly.
 
 ---
 
@@ -384,23 +374,18 @@ To see detailed logs, read `/app/logs/*.event.log` (session events) and `docker 
 ### 10.1 Run the tests
 
 ```bash
-mvn test                                       # all tests
-mvn test -Dtest=OrderTest                      # one test class
-mvn test -Dtest='com.fix.simulator.defects.**' # regression tests for fixed defects
+./build.sh test                                                   # all tests, in Docker
+MVN_ARGS="-Dtest=OrderTest" ./build.sh test                       # one test class
+MVN_ARGS="-Dtest='com.fix.simulator.defects.**'" ./build.sh test  # regression tests for fixed defects
 ```
 
-There are 490 tests in 25 test classes. Mockito is used only for handler tests. Order-book and engine tests use real objects.
+There are 517 tests in 28 test classes. Mockito is used only for handler tests. Order-book and engine tests use real objects.
 
 The `defects` package holds regression tests for defects D1 to D8 (see `CLAUDE.md`).
 
 ### 10.2 Coverage report (JaCoCo)
 
-`mvn test` also writes a coverage report:
-
-```bash
-mvn test
-open target/site/jacoco/index.html     # macOS; use your file browser elsewhere
-```
+`./build.sh test` also writes a coverage report to `target/site/jacoco/` on your machine. Open `index.html` in a browser.
 
 | File | Use |
 |---|---|
@@ -413,11 +398,12 @@ Branch coverage is the closest measure of condition coverage.
 ### 10.3 Admin UI development
 
 ```bash
-cd admin-ui
-npm install
-npm run dev     # dev server; proxies /api to localhost:8080, so start the jar first
-npm run build   # writes admin-ui/dist, which the jar serves
+./build.sh ui-build    # builds admin-ui/dist in the toolbox container
+./build.sh build       # rebuilds the image with the new UI
+./build.sh run         # restarts the simulator with it
 ```
+
+The Vite dev server is not part of the Docker workflow. Each UI change is checked by `ui-build`, and `build` packages it.
 
 ---
 

@@ -1,5 +1,8 @@
 #!/bin/bash
-# Build FIX Exchange Simulator Docker image and push to registry
+# Build, test, run and develop the FIX Exchange Simulator.
+#
+# Everything runs inside Docker. This script needs only the docker CLI on the host:
+# the tests, the admin UI build and the Java build all run in containers.
 
 set -e
 
@@ -41,11 +44,21 @@ usage() {
 Usage: $0 <command> [options]
 
 Commands:
-  build       Build fix-simulator image
+  build       Build fix-simulator image (compiles, runs the tests, builds the UI)
+  run         Start the image as container fix-simulator (admin token printed)
+  test        Run the Java tests and coverage report in the toolbox container
+  ui-build    Build the admin UI in the toolbox container
+  shell       Open a shell in the toolbox container (JDK 17, Maven, Node 20)
+  dev-image   Build the toolbox image
   push        Push image to registry
   build-push  Build and push (default)
   clean       Remove local images
   help        Show this message
+
+Environment variables for run / test:
+  ADMIN_TOKEN          Admin token for run (default: a random token, printed)
+  MVN_ARGS             Extra Maven arguments for test, e.g. MVN_ARGS="-Dtest=OrderTest"
+  SKIP_TESTS=true      Skip tests in the build (for quick iteration only)
 
 Options:
   --version <tag>      Image version tag (default: latest)
@@ -93,6 +106,74 @@ REGISTRY_PATH="${REGISTRY:+$REGISTRY/}$REPO"
 REGISTRY_IMAGE="$REGISTRY_PATH:$VERSION"
 REGISTRY_LATEST="$REGISTRY_PATH:latest"
 
+DEV_IMAGE="fix-simulator-dev:latest"   # toolbox: JDK 17, Maven, Node 20
+M2_VOLUME="fix-simulator-m2"           # Maven and npm caches, kept between runs
+CONTAINER_NAME="fix-simulator"
+
+require_docker() {
+    if ! command -v docker &>/dev/null; then
+        log_error "docker not found in PATH. Install Docker, the only host requirement."
+        exit 1
+    fi
+    if ! docker info &>/dev/null; then
+        log_error "The Docker daemon is not running."
+        exit 1
+    fi
+}
+
+ensure_dev_image() {
+    if ! docker image inspect "$DEV_IMAGE" &>/dev/null; then
+        log_step "Building developer toolbox image $DEV_IMAGE"
+        docker build -t "$DEV_IMAGE" -f "$SCRIPT_DIR/Dockerfile.dev" "$SCRIPT_DIR"
+    fi
+}
+
+# Run a command in the toolbox container as the current user, with the repository mounted at /src.
+dev_run() {
+    ensure_dev_image
+    local tty=""
+    if [ -t 0 ] && [ -t 1 ]; then tty="-it"; fi
+    docker run --rm $tty \
+        --user "$(id -u):$(id -g)" \
+        -e HOME=/tmp/home \
+        -e npm_config_cache=/m2/npm \
+        -v "$SCRIPT_DIR:/src" \
+        -v "$M2_VOLUME:/m2" \
+        -w /src \
+        "$DEV_IMAGE" "$@"
+}
+
+run_tests() {
+    log_step "Running tests and coverage in the toolbox container"
+    dev_run mvn -B -Dmaven.repo.local=/m2/repository verify ${MVN_ARGS:-}
+    log_info "Coverage report: $SCRIPT_DIR/target/site/jacoco/index.html"
+}
+
+run_ui_build() {
+    log_step "Building the admin UI in the toolbox container"
+    dev_run sh -c 'cd admin-ui && npm ci --no-audit --no-fund && npm run build'
+    log_info "UI written to $SCRIPT_DIR/admin-ui/dist"
+}
+
+run_container() {
+    local token="${ADMIN_TOKEN:-}"
+    if [ -z "$token" ]; then
+        token="$(dev_run sh -c 'head -c 16 /dev/urandom | od -An -tx1 | tr -d " \n"' | tail -n 1)"
+    fi
+
+    log_step "Starting container $CONTAINER_NAME from $LOCAL_IMAGE"
+    docker rm -f "$CONTAINER_NAME" &>/dev/null || true
+    docker run -d --name "$CONTAINER_NAME" \
+        -p 9876:9876 -p 8080:8080 \
+        -e ADMIN_TOKEN="$token" \
+        -v fix-store:/app/store \
+        -v fix-logs:/app/logs \
+        "$LOCAL_IMAGE" >/dev/null
+
+    log_info "FIX port 9876, admin UI http://localhost:8080"
+    log_info "Admin token: $token"
+}
+
 check_prerequisites() {
     log_step "Checking prerequisites..."
 
@@ -117,7 +198,7 @@ check_prerequisites() {
 build_image() {
     log_step "Building Docker image: $LOCAL_IMAGE"
 
-    BUILD_ARGS="--platform $PLATFORM -t $LOCAL_IMAGE -f $SCRIPT_DIR/Dockerfile $SCRIPT_DIR"
+    BUILD_ARGS="--platform $PLATFORM -t $LOCAL_IMAGE -f $SCRIPT_DIR/Dockerfile --build-arg SKIP_TESTS=${SKIP_TESTS:-false} $SCRIPT_DIR"
 
     if [ "$NO_CACHE" = true ]; then
         BUILD_ARGS="$BUILD_ARGS --no-cache"
@@ -171,7 +252,28 @@ clean_images() {
 case "$COMMAND" in
   build)
     check_prerequisites
+    require_docker
     build_image
+    ;;
+  run)
+    require_docker
+    run_container
+    ;;
+  test)
+    require_docker
+    run_tests
+    ;;
+  ui-build)
+    require_docker
+    run_ui_build
+    ;;
+  shell)
+    require_docker
+    dev_run bash
+    ;;
+  dev-image)
+    require_docker
+    ensure_dev_image
     ;;
   push)
     push_image
