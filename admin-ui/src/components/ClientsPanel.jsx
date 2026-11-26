@@ -148,7 +148,7 @@ export default function ClientsPanel({ onViewMessages }) {
           ))}
           <input
             className="filter-input"
-            placeholder="Filter CompID\u2026"
+            placeholder="Filter CompID…"
             value={filter}
             onChange={e => setFilter(e.target.value)}
             style={{ marginLeft: 'auto' }}

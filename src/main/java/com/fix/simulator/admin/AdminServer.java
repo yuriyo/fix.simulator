@@ -6,6 +6,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.fix.simulator.engine.Execution;
 import com.fix.simulator.engine.MatchingEngine;
 import com.fix.simulator.engine.Order;
+import com.fix.simulator.engine.Page;
 import com.fix.simulator.engine.OrderStatus;
 import com.fix.simulator.util.ExecReportHelper;
 import io.javalin.Javalin;
@@ -141,6 +142,9 @@ public class AdminServer {
                 throw new io.javalin.http.UnauthorizedResponse("Missing or invalid admin token");
         });
 
+        // Bad paging parameters (offset / limit) become HTTP 400 with a readable message.
+        app.exception(BadRequest.class, (e, ctx) -> ctx.status(400).json(error(e.getMessage())));
+
         // ── WebSocket events ──────────────────────────────────────────────────
         app.ws("/api/ws/events", ws -> {
             ws.onConnect(ctx -> {
@@ -174,18 +178,12 @@ public class AdminServer {
         // ── Orders ────────────────────────────────────────────────────────────
         app.get("/api/orders", ctx -> {
             String symbol = ctx.queryParam("symbol");
-            List<Map<String, Object>> orders = engine.getAllActiveOrders().stream()
-                    .filter(o -> symbol == null || o.getSymbol().equals(symbol))
-                    .map(this::orderToMap)
-                    .collect(Collectors.toList());
-            ctx.json(orders);
+            ctx.json(pageJson(engine.getActiveOrdersPage(symbol, offsetParam(ctx), limitParam(ctx)), this::orderToMap));
         });
 
         app.get("/api/orders/history", ctx -> {
             String symbol = ctx.queryParam("symbol");
-            ctx.json(engine.getCompletedOrders(symbol).stream()
-                    .map(this::orderToMap)
-                    .collect(Collectors.toList()));
+            ctx.json(pageJson(engine.getCompletedOrdersPage(symbol, offsetParam(ctx), limitParam(ctx)), this::orderToMap));
         });
 
         app.delete("/api/orders/{orderId}", ctx -> {
@@ -210,14 +208,14 @@ public class AdminServer {
         // ── Trades ────────────────────────────────────────────────────────────
         app.get("/api/trades", ctx -> {
             String symbol = ctx.queryParam("symbol");
-            ctx.json(engine.getTradeLog(symbol));
+            ctx.json(pageJson(engine.getTradesPage(symbol, offsetParam(ctx), limitParam(ctx)), java.util.function.Function.identity()));
         });
 
         // ── Executions ───────────────────────────────────────────────────────
         app.get("/api/executions", ctx -> {
             String symbol   = ctx.queryParam("symbol");
             String clientId = ctx.queryParam("clientId");
-            ctx.json(engine.getExecutionLog(symbol, clientId));
+            ctx.json(pageJson(engine.getExecutionsPage(symbol, clientId, offsetParam(ctx), limitParam(ctx)), java.util.function.Function.identity()));
         });
 
         // ── Instruments ───────────────────────────────────────────────────────
@@ -408,33 +406,13 @@ public class AdminServer {
         app.get("/api/dashboard", ctx -> {
             Map<String, Object> dash = new LinkedHashMap<>();
 
-            // -- Order counts by status --
-            List<Order> allActive = engine.getAllActiveOrders();
-            long totalOrders    = engine.getExecutionLog(null, null).stream()
-                    .filter(e -> "NEW".equals(e.get("execType"))).count();
-            long openOrders     = allActive.size();
-            List<Map<String, Object>> allTrades = engine.getTradeLog(null);
-            long tradeCount     = allTrades.size();
-            long execCount      = engine.getExecutionLog(null, null).size();
-
-            dash.put("totalOrders",  totalOrders);
-            dash.put("openOrders",   openOrders);
-            dash.put("tradeCount",   tradeCount);
-            dash.put("execCount",    execCount);
-
-            // -- Order status breakdown (for donut chart), counted per order --
-            Map<String, Long> ordersByStatus = new LinkedHashMap<>();
-            for (OrderStatus st : OrderStatus.values()) ordersByStatus.put(st.name(), 0L);
-            // Walk all tracked orders
-            for (Order o : allActive) {
-                ordersByStatus.merge(o.getStatus().name(), 1L, Long::sum);
-            }
-            for (String sym : engine.getSymbols()) {
-                for (Order o : engine.getCompletedOrders(sym)) {
-                    ordersByStatus.merge(o.getStatus().name(), 1L, Long::sum);
-                }
-            }
-            dash.put("ordersByStatus", ordersByStatus);
+            // -- Lifetime totals since start (not limited by the retained history) --
+            MatchingEngine.LifetimeStats life = engine.getLifetimeStats();
+            dash.put("totalOrders",  life.orders());
+            dash.put("openOrders",   life.open());
+            dash.put("tradeCount",   life.trades());
+            dash.put("execCount",    life.executions());
+            dash.put("ordersByStatus", engine.getLifetimeOrdersByStatus());
 
             // -- Sessions --
             int activeSessions = 0, totalSessions = 0;
@@ -445,17 +423,13 @@ public class AdminServer {
             dash.put("activeSessions", activeSessions);
             dash.put("totalSessions",  totalSessions);
 
-            // -- Volume by symbol (trade count + total qty) --
+            // -- Volume by symbol (lifetime trade count + total qty) --
             Map<String, Object> volumeBySymbol = new LinkedHashMap<>();
             for (String sym : engine.getSymbols()) {
-                List<Map<String, Object>> symTrades = engine.getTradeLog(sym);
-                long totalQty = 0;
-                for (Map<String, Object> t : symTrades) {
-                    totalQty += ((Number) t.get("qty")).longValue();
-                }
+                MatchingEngine.SymbolTotals st = engine.getLifetimeSymbolTotals(sym);
                 Map<String, Object> sv = new LinkedHashMap<>();
-                sv.put("trades", symTrades.size());
-                sv.put("volume", totalQty);
+                sv.put("trades", st.trades());
+                sv.put("volume", st.volume());
                 volumeBySymbol.put(sym, sv);
             }
             dash.put("volumeBySymbol", volumeBySymbol);
@@ -467,14 +441,13 @@ public class AdminServer {
             }
             dash.put("instrumentStates", instrumentStates);
 
-            // -- Recent trades (last 20 for sparkline) --
-            int tradeLogSize = allTrades.size();
-            List<Map<String, Object>> recentTrades = allTrades.subList(
-                    Math.max(0, tradeLogSize - 50), tradeLogSize);
-            dash.put("recentTrades", recentTrades);
+            // -- Recent trades for the sparkline, oldest first (last 50 retained) --
+            List<Map<String, Object>> recent = new ArrayList<>(engine.getTradesPage(null, 0, 50).rows());
+            Collections.reverse(recent);
+            dash.put("recentTrades", recent);
 
-            // -- Messages logged --
-            dash.put("messagesLogged", messageLog.getMessages(null, null).size());
+            // -- Messages logged since start (inbound + outbound) --
+            dash.put("messagesLogged", messageLog.totalRecorded());
 
             ctx.json(dash);
         });
@@ -561,6 +534,50 @@ public class AdminServer {
 
     private Map<String, String> error(String msg) {
         return Map.of("error", msg);
+    }
+
+    /** Thrown for invalid query parameters; mapped to HTTP 400. */
+    static final class BadRequest extends RuntimeException {
+        BadRequest(String message) { super(message); }
+    }
+
+    /** Largest page a client may request, so one response stays small. */
+    static final int MAX_PAGE_SIZE     = 500;
+    static final int DEFAULT_PAGE_SIZE = 25;
+
+    /** {@code offset} query parameter: 0 or more, default 0. */
+    static int offsetParam(io.javalin.http.Context ctx) {
+        return intParam(ctx, "offset", 0, Integer.MAX_VALUE, 0);
+    }
+
+    /** {@code limit} query parameter: 1 to {@link #MAX_PAGE_SIZE}, default {@link #DEFAULT_PAGE_SIZE}. */
+    static int limitParam(io.javalin.http.Context ctx) {
+        return intParam(ctx, "limit", 1, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE);
+    }
+
+    static int intParam(io.javalin.http.Context ctx, String name, int min, int max, int dflt) {
+        String raw = ctx.queryParam(name);
+        if (raw == null || raw.isBlank()) return dflt;
+        int v;
+        try {
+            v = Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            throw new BadRequest(name + " must be a whole number");
+        }
+        if (v < min || v > max) throw new BadRequest(name + " must be between " + min + " and " + max);
+        return v;
+    }
+
+    /** Page envelope for the admin UI: total rows available, the window requested, and the rows. */
+    static <T, R> Map<String, Object> pageJson(Page<T> page, java.util.function.Function<T, R> map) {
+        List<Object> rows = new ArrayList<>(page.rows().size());
+        for (T r : page.rows()) rows.add(map.apply(r));
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("total",  page.total());
+        m.put("offset", page.offset());
+        m.put("limit",  page.limit());
+        m.put("rows",   rows);
+        return m;
     }
 
     private static int parseInt(String s, int def) {

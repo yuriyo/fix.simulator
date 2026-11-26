@@ -1,274 +1,469 @@
 # FIX Exchange Simulator
 
-A FIX 4.4 exchange simulator built with **Java 17** and **QuickFIX/J 2.3.1**.
+A test exchange for FIX clients. It accepts FIX 4.2 connections over TCP, matches orders in an in-memory order book, and replies with execution reports. Use it to test trading clients without a real exchange.
+
+- **Language and libraries:** Java 17, QuickFIX/J 2.3.1, Javalin (admin API), React (admin UI).
+- **Protocol:** FIX **4.2** (`BeginString=FIX.4.2`). Older notes that say FIX 4.4 are wrong.
+- **State:** Orders and trades live in memory and are lost on restart. FIX session sequence numbers are kept on disk, so a restarted simulator can resume sessions.
 
 ---
 
-## Features
+## Contents
 
-| Category | Details |
+1. [Prerequisites](#1-prerequisites)
+2. [Quick start with Docker (recommended)](#2-quick-start-with-docker-recommended)
+3. [Run without Docker](#3-run-without-docker)
+4. [Connect a FIX client](#4-connect-a-fix-client)
+5. [Configuration](#5-configuration)
+6. [Admin UI and API](#6-admin-ui-and-api)
+7. [Order behaviour](#7-order-behaviour)
+8. [Maintenance](#8-maintenance)
+9. [Troubleshooting](#9-troubleshooting)
+10. [Build, test and coverage](#10-build-test-and-coverage)
+11. [Performance](#11-performance)
+12. [Project layout](#12-project-layout)
+13. [Known limitations](#13-known-limitations)
+
+---
+
+## 1. Prerequisites
+
+| For | You need |
 |---|---|
-| Protocol | FIX 4.4 over TCP |
-| Session layer | QuickFIX/J (heartbeat, sequence store, resend, logon/logout) |
-| Multiple clients | Dynamic session acceptance – any CompID connects without config changes |
-| Sequence restore | Per-session `FileStore` in `store/`; resend replay on reconnect |
-| Order types | LIMIT, IOC (Immediate or Cancel), FOK (Fill or Kill), STOP, STOP LIMIT |
-| Operations | New Order, Cancel, Cancel-Replace (modify qty / price) |
-| Market data | Client-driven via FIX Quote (S) and MassQuote (i) messages |
-| Matching | Price-Time FIFO central limit order book, one book per instrument |
-| Stop triggering | Stops checked and triggered after every fill |
-| Performance | ~2–10K messages/s (per-symbol synchronized OrderBook, Java NIO via MINA) |
-| Persistence | Real-time in-memory only (FIX session sequences are stored, not order state) |
+| Docker route | Docker (Desktop or Engine). Nothing else. |
+| Local route | JDK 17, Maven 3.8 or newer, and Node.js 20 or newer if you want the web UI |
+| Build the image | Docker, and this repository |
+
+Check your versions:
+
+```bash
+docker --version
+java -version      # must report 17
+mvn -version       # 3.8 or newer
+node --version     # 20 or newer (only for the web UI)
+```
+
+Ports used:
+
+| Port | Purpose |
+|---|---|
+| `9876` | FIX acceptor (clients connect here) |
+| `8080` | Admin web UI and REST API |
 
 ---
 
-## Quick Start
+## 2. Quick start with Docker (recommended)
 
-### Option A – Docker (recommended)
+Run every command from the repository root (the folder that contains `Dockerfile` and `build.sh`).
+
+### Step 1: Build the image
 
 ```bash
-# Build locally as fix-simulator:<version> (no registry, no namespace by default)
 ./build.sh build --version 1.0.0
-
-# Build and push: a registry host is required for push
-./build.sh build-push --version 1.0.0 --registry registry.domain
-
-# Build only
-./build.sh build
-
-# Push a previously built image
-./build.sh push --version 1.0.0 --registry registry.domain
-
-# Build without Docker layer cache
-./build.sh build --no-cache
-
-# Registry host and namespace via env vars
-REGISTRY=registry.domain IMAGE_PREFIX=team ./build.sh build-push --version 1.0.0
-
-# Show help
-./build.sh help
 ```
 
-Run the container:
+This creates a local image named `fix-simulator:1.0.0`. It needs no registry. The first build takes several minutes because it downloads dependencies.
+
+### Step 2: Start the simulator
+
+Choose an admin token. It protects every change made through the admin API and UI:
 
 ```bash
-docker run -d \
-  -p 9876:9876 \
-  -v $(pwd)/config:/app/config \
-  -v $(pwd)/store:/app/store \
-  -v $(pwd)/logs:/app/logs \
-  fix-simulator:latest
+export ADMIN_TOKEN="$(openssl rand -hex 16)"
+echo "Admin token: $ADMIN_TOKEN"   # keep this; you will need it in the UI
+
+docker run -d --name fix-simulator \
+  -p 9876:9876 -p 8080:8080 \
+  -e ADMIN_TOKEN="$ADMIN_TOKEN" \
+  -v fix-store:/app/store \
+  -v fix-logs:/app/logs \
+  fix-simulator:1.0.0
 ```
 
-The `config/`, `store/`, and `logs/` directories can be bind-mounted to inject
-custom configuration and persist FIX session sequence state between restarts.
+What each option does:
 
-### Option B – Local JVM
+- `-p 9876:9876` exposes the FIX port. `-p 8080:8080` exposes the admin UI.
+- `-e ADMIN_TOKEN=...` sets the admin token. If you leave it out, the simulator generates one and prints it in the logs (`docker logs fix-simulator | grep "generated one"`). A fixed token is easier to work with.
+- `-v fix-store:/app/store` and `-v fix-logs:/app/logs` keep FIX sequence numbers and message logs in named Docker volumes. They survive container restarts and removal.
+
+### Step 3: Check that it is running
 
 ```bash
-cd fix.simulator
+docker logs fix-simulator | tail -20
+```
+
+You should see the acceptor start on port 9876 and the admin server start on port 8080. Then open **http://localhost:8080** in a browser and enter the admin token when asked.
+
+### Step 4: Stop and start
+
+```bash
+docker stop fix-simulator      # stop; sequence numbers are kept
+docker start fix-simulator     # start again with the same state
+docker rm -f fix-simulator     # remove the container (volumes are kept)
+```
+
+### Using your own configuration
+
+The image contains default files in `/app/config`. To change them, mount your own folder over it:
+
+```bash
+docker run -d --name fix-simulator \
+  -p 9876:9876 -p 8080:8080 \
+  -e ADMIN_TOKEN="$ADMIN_TOKEN" \
+  -v "$(pwd)/config:/app/config" \
+  -v fix-store:/app/store \
+  -v fix-logs:/app/logs \
+  fix-simulator:1.0.0
+```
+
+Your `config` folder must contain `server.cfg` and `instruments.yml`. Copy them from the repository's `config/` folder as a starting point.
+
+### Build options
+
+```bash
+./build.sh build --version 1.0.0 --no-cache    # rebuild without Docker's cache
+./build.sh help                                # show all commands and options
+```
+
+To push to a registry (only if your team uses one):
+
+```bash
+./build.sh build-push --version 1.0.0 --registry registry.example.com
+REGISTRY=registry.example.com IMAGE_PREFIX=team ./build.sh build-push --version 1.0.0
+```
+
+`--registry` is required for `push`. `IMAGE_PREFIX` adds a namespace, for example `team/fix-simulator`. Both are empty by default.
+
+---
+
+## 3. Run without Docker
+
+Use this when you want to change the code or run it directly on your machine.
+
+```bash
+# 1. Build the server jar
 mvn clean package -q
-java -jar target/fix-simulator-1.0.0-SNAPSHOT.jar
-# or with explicit config paths:
+
+# 2. (Optional) Build the web UI. Skip this and the simulator still runs,
+#    but the browser UI will not be served.
+(cd admin-ui && npm install && npm run build)
+
+# 3. Set the admin token and start from the repository root
+export ADMIN_TOKEN="choose-a-token"
 java -jar target/fix-simulator-1.0.0-SNAPSHOT.jar config/server.cfg config/instruments.yml
 ```
 
-### 2. Configure instruments
+The jar must be started from the repository root, because the web UI is loaded from `admin-ui/dist` relative to the current folder.
 
-Edit `config/instruments.yml` to add/remove tradeable symbols.
-
-The server listens on **port 9876** by default (change `SocketAcceptPort` in `config/server.cfg`).
+To change the admin port: `java -Dadmin.port=8081 -jar ...`.
 
 ---
 
-## Configuration
+## 4. Connect a FIX client
 
-### server.cfg (QuickFIX/J)
+Use these settings in your client:
 
-Key settings:
+| Setting | Value |
+|---|---|
+| Host | `localhost` (or the machine running the simulator) |
+| Port | `9876` |
+| `BeginString` | `FIX.4.2` (a FIX 4.4 client is rejected) |
+| `SenderCompID` | Any name you like, for example `CLIENT1`. Each name gets its own session. |
+| `TargetCompID` | `EXCHANGE` |
+| Heartbeat | `30` seconds (the default) |
 
-| Setting | Default | Description |
+The simulator accepts any `SenderCompID` without configuration changes. Each name gets its own session and its own sequence-number file.
+
+A ready-made test client, `fix.testharness`, is in a sibling repository. It runs scripted scenarios against this simulator (see that repository's README).
+
+---
+
+## 5. Configuration
+
+### 5.1 `config/server.cfg` (QuickFIX/J session settings)
+
+| Setting | Default | Meaning |
 |---|---|---|
-| `SocketAcceptPort` | `9876` | TCP listen port |
-| `ResetOnLogon` | `N` | `N` = keep sequences (enable restore); `Y` = reset on every logon |
-| `FileStorePath` | `store` | Directory for sequence number files |
-| `FileLogPath` | `logs` | Directory for FIX message logs |
+| `SocketAcceptPort` | `9876` | TCP port for FIX clients |
 | `HeartBtInt` | `30` | Heartbeat interval in seconds |
+| `ResetOnLogon` | `N` | `N` keeps sequence numbers so sessions resume. `Y` resets them on each logon. |
+| `ResetOnLogout` / `ResetOnDisconnect` | `N` | Same meaning, applied at logout or disconnect |
+| `FileStorePath` | `store` | Folder for sequence and message store files |
+| `FileLogPath` | `logs` | Folder for FIX message and event logs |
+| `DataDictionary` | `FIX42.xml` | FIX 4.2 dictionary used to validate messages |
+| `[SESSION] BeginString` | `FIX.4.2` | Protocol version. Must match your client. |
 
-### instruments.yml
+Change settings in `config/server.cfg` and restart the simulator. The file is read at startup.
+
+### 5.2 `config/instruments.yml` (tradeable symbols)
 
 ```yaml
 instruments:
-  - symbol: AAPL
+  - symbol: AAPL          # FIX tag 55, must be unique
     description: "Apple Inc."
-    lotSize: 1
-    tickSize: "0.01"
+    lotSize: 1            # minimum order quantity step
+    tickSize: "0.01"      # minimum price step
+```
+
+Orders with a quantity off the lot size or a price off the tick size are rejected. Changes take effect after a restart.
+
+### 5.3 Environment variables and system properties
+
+| Variable (or `-D` property) | Default | Meaning |
+|---|---|---|
+| `ADMIN_TOKEN` (`-Dadmin.token`) | generated at each start | Bearer token needed for every change made through the admin API |
+| `ADMIN_BIND` (`-Dadmin.bind`) | `127.0.0.1` locally, `0.0.0.0` in Docker | Network address the admin server listens on |
+| `-Dadmin.port` | `8080` | Admin port |
+| `-Dadmin.ui` | `admin-ui/dist` | Folder with the built web UI |
+| `JAVA_TOOL_OPTIONS` | none | Extra JVM options, for example `-Xmx2g` to limit memory |
+
+---
+
+## 6. Admin UI and API
+
+Open **http://localhost:8080** (Docker) or the admin port you chose. The UI shows order books, orders, trades, executions and the FIX message log, and lets you cancel orders and change book levels.
+
+The API is at `/api/...`. Reading data needs no token. Any change (POST, PUT, PATCH, DELETE) needs the header:
+
+```bash
+curl -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8080/api/orders
+curl -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8080/api/orders/<orderId>
+```
+
+The live event feed is at `/api/ws/events` (WebSocket). It is not protected by the token (see [Known limitations](#13-known-limitations)).
+
+The admin server listens on `127.0.0.1` unless `ADMIN_BIND` is set. Keep it that way on shared machines.
+
+---
+
+## 7. Order behaviour
+
+### 7.1 Supported messages
+
+**Client to simulator (inbound):**
+
+| MsgType (tag 35) | Name | What it does |
+|---|---|---|
+| `D` | NewOrderSingle | Submit an order |
+| `F` | OrderCancelRequest | Cancel an order |
+| `G` | OrderCancelReplaceRequest | Change quantity or price of an order |
+| `S` | Quote | Single-symbol bid and ask quote |
+| `i` | MassQuote | Quotes for several symbols |
+
+**Simulator to client (outbound):**
+
+| MsgType | Name | When |
+|---|---|---|
+| `8` | ExecutionReport | New order acknowledged, fill, cancel, replace or reject |
+| `9` | OrderCancelReject | A cancel or replace was refused |
+| `b` | QuoteAcknowledgement / MassQuoteAcknowledgement | Reply to a quote |
+
+### 7.2 Order types
+
+| OrdType (tag 40) | TIF (tag 59) | Behaviour |
+|---|---|---|
+| LIMIT `2` | DAY `0` or GTC `1` | Rests in the book until filled or cancelled |
+| LIMIT `2` | IOC `3` | Fills what it can now; the rest is cancelled at once |
+| LIMIT `2` | FOK `4` | Fills completely now, or is cancelled with **no partial fills** |
+| MARKET `1` | DAY `0` | Fills at any price; unfilled remainder is cancelled |
+| MARKET `1` | FOK `4` | All or nothing at market price |
+| STOP `3` | GTC `1` | Waits; becomes a market order when the stop price is reached |
+| STOP LIMIT `4` | GTC `1` | Waits; becomes a limit order at `Price` (44) when the stop price (99) is reached |
+
+**FOK rule:** the engine counts available shares before filling anything. If there is not enough, the order is cancelled and the book is unchanged.
+
+**Stop rule:** a buy stop triggers when the last price is at or above the stop price. A sell stop triggers when the last price is at or below it. Stops are checked after every fill.
+
+### 7.3 Quotes
+
+A quote's bid and ask become resting GTC limit orders in the shared book, so other clients' orders can match them. A new quote from a session replaces that session's previous quote on the same symbol.
+
+---
+
+## 8. Maintenance
+
+### 8.1 What to check regularly
+
+| Check | How | Action if wrong |
+|---|---|---|
+| Simulator is running | `docker ps` or the admin UI | `docker start fix-simulator` |
+| Disk use of logs | `docker exec fix-simulator du -sh /app/logs` | See 8.3 |
+| Errors in the log | `docker logs fix-simulator 2>&1 \| grep -i error` | Read the message; see [Troubleshooting](#9-troubleshooting) |
+
+### 8.2 Where data is kept
+
+| Path (in the container) | Contents | Kept across restart? |
+|---|---|---|
+| `/app/store` | Session sequence numbers and message store (`FIX.4.2-<sender>-<target>.*`) | Yes, if mounted as a volume |
+| `/app/logs` | `*.messages.log` (every FIX message) and `*.event.log` (session events), one pair per session | Yes, if mounted as a volume |
+| `/app/config/blocked-clients.yml` | Client block and allow lists made in the admin UI | Yes, if `/app/config` is mounted |
+| In memory | Orders, trades, executions, book | **No**, lost on restart |
+
+### 8.3 Logs grow without limit
+
+The simulator does not rotate or delete its message logs. A busy session can write hundreds of MB. To free space:
+
+```bash
+docker stop fix-simulator
+docker run --rm -v fix-logs:/app/logs alpine sh -c 'rm -f /app/logs/*.messages.log'
+docker start fix-simulator
+```
+
+Delete only logs you no longer need. Stopping the simulator first avoids writing to a file while it is removed.
+
+### 8.4 Reset sessions
+
+Resetting makes the next logon start at sequence number 1. Clients must also reset.
+
+- **One session:** stop the simulator, delete the matching files in `/app/store` (for example `FIX.4.2-EXCHANGE-CLIENT1.*`), then start again.
+- **All sessions:** stop the simulator and delete everything in `/app/store`.
+- **Temporarily:** set `ResetOnLogon=Y` in `server.cfg` and restart. Set it back to `N` afterwards.
+
+```bash
+docker stop fix-simulator
+docker run --rm -v fix-store:/app/store alpine sh -c 'rm -f /app/store/*'
+docker start fix-simulator
+```
+
+### 8.5 Change symbols or settings
+
+Edit `config/instruments.yml` or `config/server.cfg` and restart. Open orders are lost on restart, so restart when the market is idle.
+
+### 8.6 Back up and restore
+
+To keep sessions across machines, copy the store volume:
+
+```bash
+docker run --rm -v fix-store:/from -v "$(pwd)":/to alpine tar czf /to/fix-store.tgz -C /from .
+```
+
+Restore into an empty volume with the reverse command.
+
+### 8.7 Upgrade
+
+```bash
+git pull
+./build.sh build --version 1.1.0
+docker stop fix-simulator && docker rm fix-simulator
+docker run -d --name fix-simulator -p 9876:9876 -p 8080:8080 \
+  -e ADMIN_TOKEN="$ADMIN_TOKEN" -v fix-store:/app/store -v fix-logs:/app/logs \
+  fix-simulator:1.1.0
+```
+
+The volumes are kept, so sessions resume. Check that your clients still use `FIX.4.2`.
+
+### 8.8 Remove everything
+
+```bash
+docker rm -f fix-simulator
+docker volume rm fix-store fix-logs
+docker rmi fix-simulator:1.0.0
 ```
 
 ---
 
-## FIX Message Reference
+## 9. Troubleshooting
 
-### Inbound (client → server)
-
-| MsgType | Tag 35 | Description |
+| Symptom | Likely cause | Fix |
 |---|---|---|
-| NewOrderSingle | `D` | Submit new order |
-| OrderCancelRequest | `F` | Cancel an existing order |
-| OrderCancelReplaceRequest | `G` | Modify qty / price of existing order |
-| Quote | `S` | Single-symbol bid/ask quote |
-| MassQuote | `i` | Multi-symbol bid/ask quotes |
+| `port is already allocated` on start | Another program uses 9876 or 8080 | Stop it, or change the left-hand port in `-p` |
+| Client is rejected at logon | `BeginString` is not `FIX.4.2` | Set the client to FIX 4.2 |
+| Client logs on, then `MsgSeqNum too low` or resend loops | Sequence numbers in the client and simulator differ | Reset the session on both sides (section 8.4) |
+| Admin API returns 401 or 403 | Missing or wrong `Authorization: Bearer` token | Use the token from `ADMIN_TOKEN` or from the logs |
+| Admin UI page is blank or 404 | Web UI not built, or simulator started outside the repo root | Build it (section 3) and start from the repo root |
+| `Permission denied` writing `/app/store` or `/app/logs` | A bind-mounted folder is not writable by the container user | Use named volumes as in section 2, or `chown` the folder |
+| Orders rejected as `Unsupported` or with a field error | Quantity off lot size, price off tick size, or a missing field | Check `instruments.yml` and the order fields |
+| Simulator stops with exit code 137 | Out of memory (the container or Java heap) | Give the container more memory (`--memory 4g`), or cap the heap (`-e JAVA_TOOL_OPTIONS=-Xmx2g`) |
 
-### Outbound (server → client)
-
-| MsgType | Tag 35 | Trigger |
-|---|---|---|
-| ExecutionReport | `8` | New ack, fills, cancel, replace, reject |
-| OrderCancelReject | `9` | Cancel / replace rejected |
-| QuoteAcknowledgement | `b` | Response to Quote message |
-| MassQuoteAcknowledgement | `b` | Response to MassQuote message |
+To see detailed logs, read `/app/logs/*.event.log` (session events) and `docker logs fix-simulator`.
 
 ---
 
-## Order Type Reference
+## 10. Build, test and coverage
 
-| FIX OrdType (tag 40) | TIF (tag 59) | Behaviour |
-|---|---|---|
-| LIMIT `2` | DAY `0` / GTC `1` | Rests in book; fills at limit price or better |
-| LIMIT `2` | IOC `3` | Immediate or Cancel – any unfilled remainder is cancelled immediately |
-| LIMIT `2` | FOK `4` | Fill or Kill – entire order must be fillable now; otherwise cancelled with **no partial fills** |
-| MARKET `1` | DAY `0` | Matches at any price; unfillable remainder cancelled |
-| MARKET `1` | FOK `4` | Market FOK – all-or-nothing at market price |
-| STOP `3` | GTC `1` | Held pending; converts to **market** order when `StopPx` is triggered |
-| STOP LIMIT `4` | GTC `1` | Held pending; converts to **limit** order at `Price` (44) when `StopPx` (99) is triggered |
+### 10.1 Run the tests
 
-**FOK semantics:**
-- The matching engine counts available marketable shares *before* executing any fills.
-- If `availableLiquidity < orderQty` the order is cancelled immediately and the book is left completely untouched.
-- This applies to both limit FOK (price-filtered liquidity) and market FOK (all liquidity at any price).
-
-**Stop trigger rules:**
-- **Buy stop**: triggered when `LastPrice >= StopPx`
-- **Sell stop**: triggered when `LastPrice <= StopPx`
-- Stops are evaluated after every fill in any session
-
----
-
-## Quote / Market Data Flow
-
-When a client sends a `Quote` (S) or `MassQuote` (i):
-
-1. The `MarketState` NBBO is updated (bid/ask).
-2. Bid and ask legs are inserted as resting GTC limit orders in the shared order book.
-3. Any immediate matches against existing resting orders produce `ExecutionReport` (8) responses.
-4. A `QuoteAcknowledgement` (b) is sent back.
-
----
-
-## Session Restore
-
-QuickFIX/J writes sequence state to `store/<BeginString>-<SenderCompID>-<TargetCompID>.seqnums`.
-
-When a client reconnects with the same CompIDs:
-- If `ResetOnLogon=N`, the server maintains sequence continuity.
-- The client can request a resend (`ResendRequest`); QFJ replays stored messages automatically.
-
-To **hard reset** a session: delete the corresponding files in `store/`, or set `ResetOnLogon=Y` temporarily.
-
----
-
-## Multiple Clients
-
-Dynamic session acceptance is used: any `SenderCompID` can connect without
-modifying `server.cfg`. Each new CompID pair gets an independent session and
-its own sequence store file.
-
-The `[SESSION]` block in `server.cfg` serves as the **template** (providing defaults
-like heartbeat interval and dictionary). The actual `TargetCompID` is taken from
-the connecting client's `Logon` message.
-
----
-
-## Project Structure
-
-```
-fix.simulator/
-├── pom.xml
-├── config/
-│   ├── server.cfg          # QuickFIX/J acceptor config
-│   └── instruments.yml     # Tradeable symbols
-└── src/main/java/com/fix/simulator/
-    ├── Main.java                    # Entry point, builds acceptor
-    ├── FIXSimulatorApp.java         # QuickFIX/J Application, message dispatch
-    ├── engine/
-    │   ├── Order.java               # Order domain object
-    │   ├── OrderType / Side / Status / TimeInForce  (enums)
-    │   ├── Execution.java           # Fill record
-    │   ├── MarketState.java         # NBBO per symbol
-    │   ├── OrderBook.java           # CLOB, price-time FIFO matching
-    │   └── MatchingEngine.java      # Coordinates books, stop triggers
-    ├── handler/
-    │   ├── ResponseSender.java      # Abstraction over Session.sendToTarget
-    │   ├── NewOrderHandler.java     # D → engine.newOrder
-    │   ├── CancelHandler.java       # F → engine.cancelOrder
-    │   ├── CancelReplaceHandler.java# G → engine.replaceOrder
-    │   └── QuoteHandler.java        # S / i → engine.onQuote
-    └── util/
-        ├── InstrumentRegistry.java  # Load instruments.yml
-        └── ExecReportHelper.java    # Execution → FIX ExecutionReport
+```bash
+mvn test                                       # all tests
+mvn test -Dtest=OrderTest                      # one test class
+mvn test -Dtest='com.fix.simulator.defects.**' # regression tests for fixed defects
 ```
 
----
+There are 490 tests in 25 test classes. Mockito is used only for handler tests. Order-book and engine tests use real objects.
 
-## Testing
+The `defects` package holds regression tests for defects D1 to D8 (see `CLAUDE.md`).
+
+### 10.2 Coverage report (JaCoCo)
+
+`mvn test` also writes a coverage report:
 
 ```bash
 mvn test
+open target/site/jacoco/index.html     # macOS; use your file browser elsewhere
 ```
-
-222 JUnit 5 tests across 11 test classes covering the full functional layer:
-
-| Test class | Scope |
-|---|---|
-| `OrderTest` | Order state machine (fill, cancel, trigger, qty) |
-| `ExecutionTest` | Execution construction and ExecType enum |
-| `MarketStateTest` | NBBO tracking, mid-price, symbol isolation |
-| `OrderBookTest` | Full/partial fills, FIFO ordering, IOC, **FOK**, stops, concurrency |
-| `MatchingEngineTest` | New order lifecycle, IOC, **FOK**, cancel, replace, stop triggers |
-| `ExecReportHelperTest` | FIX message construction, all tag-value converters |
-| `InstrumentRegistryTest` | YAML loading, lookup, defaults, edge cases |
-| `NewOrderHandlerTest` | Validation, field parsing, TIF (IOC / GTC / **FOK** / DAY), dispatch |
-| `CancelHandlerTest` | Cancel success / not-found paths |
-| `CancelReplaceHandlerTest` | Replace success / not-found, replacement field parsing |
-| `QuoteHandlerTest` | Quote (S), MassQuote (i), fills forwarding |
-
-Mockito 5.8 is used for handler-layer tests; engine and book tests use real objects.
-
-### Code coverage (JaCoCo)
-
-`mvn test` also runs JaCoCo and writes the coverage report to `target/site/jacoco/`:
-
-```bash
-mvn test                              # runs the tests and generates the report
-open target/site/jacoco/index.html    # macOS: browse the HTML report
-```
-
-Other useful files in `target/site/jacoco/`:
 
 | File | Use |
 |---|---|
-| `index.html` | Interactive report: line, branch and method coverage per package and class |
-| `jacoco.csv` | Flat per-class counters, for scripts |
-| `jacoco.xml` | Per-line hit counts, for tools that read JaCoCo XML |
+| `index.html` | Browse coverage per package and class |
+| `jacoco.csv` | Plain counters for scripts |
+| `jacoco.xml` | Per-line hit counts for tools |
 
-Coverage numbers are shown as missed vs covered. Branch coverage is the closest measure of condition coverage: JaCoCo reports each `if`/`&&`/`||` outcome as a separate branch.
+Branch coverage is the closest measure of condition coverage.
+
+### 10.3 Admin UI development
+
+```bash
+cd admin-ui
+npm install
+npm run dev     # dev server; proxies /api to localhost:8080, so start the jar first
+npm run build   # writes admin-ui/dist, which the jar serves
+```
 
 ---
 
-## Performance Notes
+## 11. Performance
 
-- **Target**: 2–10K messages/s total across all symbols
-- Each `OrderBook` is synchronized on its own monitor → per-symbol contention only
-- QuickFIX/J uses MINA non-blocking I/O, so the network layer is not the bottleneck
-- Hot path: `OrderBook.match()` iterates `TreeMap` price levels with `ArrayDeque` FIFO queues – O(k) where k = number of price levels crossed
-- For higher throughput, `OrderBook` can be further optimised with a lock-free design (Disruptor pattern), but is not needed at this target rate
+Measured with `fix.testharness` on a 10-core Apple Silicon host, with the simulator limited to 4 cores and the clients on the rest of the same host:
+
+| Setup | Orders per second |
+|---|---|
+| 1 simulator core, saturated | about 37k |
+| 4 simulator cores, 8 clients | about 82k to 85k (highest measured) |
+| 4 simulator cores, 4 clients | about 69k |
+
+These are the highest rates measured on that setup. The simulator's own ceiling was not reached, because the load generator on the same host could not push harder. Treat these as a lower bound on what the simulator can handle.
+
+Each client JVM needs its heap capped on a small host. Without a cap, a dozen clients can exhaust memory and the simulator is killed.
+
+---
+
+## 12. Project layout
+
+```
+fix.simulator/
+├── Dockerfile                 # three stages: Maven build, web UI build, runtime
+├── build.sh                   # build and push helper
+├── config/
+│   ├── server.cfg             # FIX acceptor settings
+│   └── instruments.yml        # tradeable symbols
+├── admin-ui/                  # React admin UI (Vite)
+├── FIX_SPEC.md                # protocol notes
+└── src/main/java/com/fix/simulator/
+    ├── Main.java              # entry point: builds the acceptor and admin server
+    ├── FIXSimulatorApp.java   # QuickFIX/J application; routes inbound messages
+    ├── engine/                # order book, matching engine, orders, executions
+    ├── handler/               # one handler per message type (D, F, G, S, i)
+    ├── admin/                 # admin REST API, WebSocket events, client registry
+    └── util/                  # instruments, logging (async), FIX report building
+```
+
+---
+
+## 13. Known limitations
+
+- **Protocol:** FIX 4.2 only. Other versions need a different QuickFIX/J dictionary.
+- **State:** orders and trades are in memory and lost on restart.
+- **Logs:** no rotation or size limit (see 8.3).
+- **Admin WebSocket:** the live event feed is not protected by the admin token. Keep the admin port on a trusted network.
+- **Fill routing:** some executions (for example fills of other clients' stop orders) are sent to the session that submitted the incoming message, not to the owning client. This is a known open issue listed in `CLAUDE.md`.
+- **Simulation only:** prices, liquidity and timing are not realistic market data. Do not use it as a real exchange.

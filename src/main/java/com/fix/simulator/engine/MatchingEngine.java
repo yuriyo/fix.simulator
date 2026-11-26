@@ -69,6 +69,23 @@ public class MatchingEngine {
     /** One matched aggressor fill, kept raw so the book lock never builds maps or formats time. */
     private record Trade(Instant time, String symbol, BigDecimal price, long qty, String aggressorSide) {}
 
+    // ── Lifetime counters: never evicted, unlike the retained logs above ──
+    private final OrderStatusCounts statusCounts = new OrderStatusCounts();
+    private final java.util.concurrent.atomic.LongAdder lifetimeTrades = new java.util.concurrent.atomic.LongAdder();
+    private final java.util.concurrent.atomic.LongAdder lifetimeExecutions = new java.util.concurrent.atomic.LongAdder();
+    private final ConcurrentHashMap<String, java.util.concurrent.atomic.LongAdder> lifetimeTradesBySymbol = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, java.util.concurrent.atomic.LongAdder> lifetimeVolumeBySymbol = new ConcurrentHashMap<>();
+
+    /**
+     * Totals since the engine started. Orders count every order accepted into the engine.
+     * Orders rejected for an unknown symbol never enter the engine, so they are not counted here.
+     */
+    public record LifetimeStats(long orders, long open, long filled, long cancelled, long rejected,
+                                long trades, long executions) {}
+
+    /** Per-symbol lifetime trade count and traded quantity. */
+    public record SymbolTotals(long trades, long volume) {}
+
     // ──────────────────────────────────────────────────────────────────────
     //  Admin wiring (optional setters – no constructor change keeps tests green)
     // ──────────────────────────────────────────────────────────────────────
@@ -334,6 +351,90 @@ public class MatchingEngine {
         return out;
     }
 
+    // ──────────────────────────────────────────────────────────────────────
+    //  Paged reads (newest first). Offset 0 is the most recent row.
+    // ──────────────────────────────────────────────────────────────────────
+
+    /** One page of retained trades, newest first, optionally for one symbol. */
+    public Page<Map<String, Object>> getTradesPage(String symbol, int offset, int limit) {
+        return pageOf(tradeLog.descendingIterator(),
+                t -> symbol == null || symbol.isEmpty() || symbol.equals(t.symbol()),
+                MatchingEngine::tradeToMap, offset, limit);
+    }
+
+    /** One page of retained executions, newest first, filtered by symbol and/or client substring. */
+    public Page<Map<String, Object>> getExecutionsPage(String symbol, String clientId, int offset, int limit) {
+        return pageOf(executionLog.descendingIterator(),
+                e -> {
+                    Order o = e.getOrder();
+                    if (symbol != null && !symbol.isEmpty() && !symbol.equals(o.getSymbol())) return false;
+                    if (clientId != null && !clientId.isEmpty()) {
+                        String sid = o.getSessionId();
+                        return sid != null && sid.contains(clientId);
+                    }
+                    return true;
+                },
+                MatchingEngine::executionToMap, offset, limit);
+    }
+
+    /** One page of resting orders, newest first, optionally for one symbol. */
+    public Page<Order> getActiveOrdersPage(String symbol, int offset, int limit) {
+        List<Order> active = new ArrayList<>(symbol == null || symbol.isEmpty()
+                ? getAllActiveOrders() : getAllActiveOrders(symbol));
+        active.sort(Comparator.comparingLong(Order::getInternalId).reversed());
+        return pageOf(active.iterator(), o -> true, o -> o, offset, limit);
+    }
+
+    /** One page of retained terminal orders, newest first, optionally for one symbol. */
+    public Page<Order> getCompletedOrdersPage(String symbol, int offset, int limit) {
+        List<Order> done = new ArrayList<>(getCompletedOrders(symbol));
+        done.sort(Comparator.comparingLong(Order::getInternalId).reversed());
+        return pageOf(done.iterator(), o -> true, o -> o, offset, limit);
+    }
+
+    /**
+     * Walk the rows once: count every match (for {@code total}) and keep only the requested window.
+     * Limit must be positive and offset non-negative; the caller validates both.
+     */
+    static <T, R> Page<R> pageOf(Iterator<T> rows, java.util.function.Predicate<T> keep,
+                                 java.util.function.Function<T, R> map, int offset, int limit) {
+        long total = 0;
+        List<R> out = new ArrayList<>(Math.min(limit, 1024));
+        while (rows.hasNext()) {
+            T row = rows.next();
+            if (!keep.test(row)) continue;
+            if (total >= offset && out.size() < limit) out.add(map.apply(row));
+            total++;
+        }
+        return new Page<>(total, offset, limit, out);
+    }
+
+    /** Lifetime totals since start. Read without the book locks; each value is a consistent counter. */
+    public LifetimeStats getLifetimeStats() {
+        return new LifetimeStats(
+                statusCounts.total(),
+                statusCounts.open(),
+                statusCounts.get(OrderStatus.FILLED),
+                statusCounts.get(OrderStatus.CANCELLED),
+                statusCounts.get(OrderStatus.REJECTED),
+                lifetimeTrades.sum(),
+                lifetimeExecutions.sum());
+    }
+
+    /** Lifetime orders per status, in {@link OrderStatus} declaration order. */
+    public Map<String, Long> getLifetimeOrdersByStatus() {
+        Map<String, Long> m = new LinkedHashMap<>();
+        for (OrderStatus st : OrderStatus.values()) m.put(st.name(), statusCounts.get(st));
+        return m;
+    }
+
+    /** Lifetime trade count and traded quantity for one symbol (zeros if it never traded). */
+    public SymbolTotals getLifetimeSymbolTotals(String symbol) {
+        java.util.concurrent.atomic.LongAdder t = lifetimeTradesBySymbol.get(symbol);
+        java.util.concurrent.atomic.LongAdder v = lifetimeVolumeBySymbol.get(symbol);
+        return new SymbolTotals(t == null ? 0 : t.sum(), v == null ? 0 : v.sum());
+    }
+
     private static Map<String, Object> tradeToMap(Trade t) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("time",         t.time().toString());
@@ -513,6 +614,9 @@ public class MatchingEngine {
                         bus.publish(wsMsg);
                     }
                 }
+            } else if (e.getExecType() == Execution.ExecType.CANCELLED && e.getOrder() == aggressor) {
+                // IOC / FOK remainder cancelled by the matcher. The client receives this report, so log it too.
+                logExecution(e);
             }
         }
 
@@ -532,12 +636,16 @@ public class MatchingEngine {
     }
 
     private void appendTrade(Trade trade) {
+        lifetimeTrades.increment();
+        lifetimeTradesBySymbol.computeIfAbsent(trade.symbol(), k -> new java.util.concurrent.atomic.LongAdder()).increment();
+        lifetimeVolumeBySymbol.computeIfAbsent(trade.symbol(), k -> new java.util.concurrent.atomic.LongAdder()).add(trade.qty());
         tradeLog.addLast(trade);
         if (tradeCount.incrementAndGet() > TRADE_LOG_CAP) evictOldest(tradeLog, tradeCount, TRADE_LOG_CAP);
     }
 
     /** Append a single execution to the execution log. */
     private void logExecution(Execution e) {
+        lifetimeExecutions.increment();
         executionLog.addLast(e);
         if (executionCount.incrementAndGet() > EXECUTION_LOG_CAP) evictOldest(executionLog, executionCount, EXECUTION_LOG_CAP);
     }
@@ -552,6 +660,9 @@ public class MatchingEngine {
 
     /** Add an order to the register and evict the oldest terminal orders beyond the cap. Lock-free. */
     private void registerOrder(Order order) {
+        // Count before the order can change status, so every transition has a matching count.
+        order.setStatusObserver(statusCounts::onChange);
+        statusCounts.onRegister(order.getStatus());
         allOrders.put(order.getInternalId(), order);
         orderHistory.addLast(order.getInternalId());
         if (orderHistoryCount.incrementAndGet() > ORDER_HISTORY_CAP) evictOldestOrders();

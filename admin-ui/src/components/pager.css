@@ -1,0 +1,35 @@
+/* Pager toolbar: first / prev / offset / next / last, rows-shown label, page size. */
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+
+.offset-input {
+  width: 96px;
+  padding: 4px 6px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid #334155;
+  border-radius: 4px;
+}
+
+.offset-input:focus {
+  outline: 2px solid #6366f1;
+  outline-offset: 0;
+}
+
+.pager-note {
+  margin: 2px 0 10px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+/* Phones: keep the pager on screen without horizontal scroll. */
+@media (max-width: 640px) {
+  .pager { gap: 4px; }
+  .offset-input { width: 80px; }
+}

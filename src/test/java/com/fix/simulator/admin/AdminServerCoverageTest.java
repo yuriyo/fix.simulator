@@ -216,7 +216,7 @@ class AdminServerCoverageTest {
                     TimeInForce.DAY, 5, new BigDecimal("10"), null));
             assertTrue(get("/api/orders").body().contains("\"clOrdId\":\"A1\""));
             assertTrue(get("/api/orders?symbol=" + SYM).body().contains("A1"));
-            assertEquals("[]", get("/api/orders?symbol=MSFT").body());
+            assertEquals("{\"total\":0,\"offset\":0,\"limit\":25,\"rows\":[]}", get("/api/orders?symbol=MSFT").body());
         }
 
         @Test

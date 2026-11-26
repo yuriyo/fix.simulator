@@ -1,135 +1,122 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { fmtMs } from '../App.jsx';
 import { useConfirm } from './ConfirmDialog.jsx';
+import Pager, { useThrottledTick, usePersisted } from './Pager.jsx';
 
 const API = '/api';
-const PAGE_SIZES = [10, 25, 100];
 
 export default function OrdersPanel({ orderEvents }) {
   const confirm = useConfirm();
-  const [orders, setOrders]     = useState([]);
-  const [history, setHistory]   = useState([]);
-  const [tab, setTab]           = useState('active');
-  const [symbolFilter, setSymFilter] = useState('');
-  const [page, setPage]         = useState(0);
-  const [pageSize, setPageSize] = useState(25);
+  const [tab, setTab]                = usePersisted('fixsim.orders.tab', 'active');   // 'active' | 'history'
+  const [symbolFilter, setSymFilter] = usePersisted('fixsim.orders.symbol', '');
+  const [offset, setOffset]          = usePersisted('fixsim.orders.offset', 0);
+  const [limit, setLimit]            = usePersisted('fixsim.orders.limit', 25);
+  const [page, setPage]              = useState({ total: 0, rows: [] });
+  const [reload, setReload]          = useState(0);
+  const tick = useThrottledTick(orderEvents);
 
-  const loadOrders = () =>
-    fetch(`${API}/orders${symbolFilter ? `?symbol=${symbolFilter}` : ''}`)
-      .then(r => r.json()).then(setOrders).catch(() => {});
-
-  const loadHistory = () =>
-    fetch(`${API}/orders/history${symbolFilter ? `?symbol=${symbolFilter}` : ''}`)
-      .then(r => r.json()).then(setHistory).catch(() => {});
-
+  // Fetch only the requested window from the server.
   useEffect(() => {
-    loadOrders();
-    loadHistory();
-    setPage(0); // reset page when data refreshes
-  }, [orderEvents, symbolFilter]);
+    const qs = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+    if (symbolFilter) qs.set('symbol', symbolFilter);
+    const path = tab === 'active' ? 'orders' : 'orders/history';
+    fetch(`${API}/${path}?${qs}`)
+      .then(r => r.json())
+      .then(p => {
+        if (!p || p.error || !Array.isArray(p.rows)) return;
+        setPage(p);
+        // Rows can disappear between refreshes; move back to the last page that still has rows.
+        if (p.total > 0 && offset >= p.total) {
+          setOffset(Math.floor((p.total - 1) / limit) * limit);
+        }
+      })
+      .catch(() => {});
+  }, [tab, symbolFilter, offset, limit, tick, reload]);
+
+  const refresh = () => setReload(r => r + 1);
 
   const cancelOrder = async (e, id) => {
     if (!e.shiftKey && !await confirm(`Cancel order ${id}?`)) return;
-    fetch(`${API}/orders/${id}`, { method: 'DELETE' })
-      .then(() => { loadOrders(); loadHistory(); });
+    fetch(`${API}/orders/${id}`, { method: 'DELETE' }).then(refresh);
   };
 
   const cancelAll = async (e) => {
     if (!symbolFilter) return alert('Set a symbol filter first');
     if (!e.shiftKey && !await confirm(`Cancel all active orders on ${symbolFilter}?`)) return;
-    fetch(`${API}/orders?symbol=${symbolFilter}`, { method: 'DELETE' })
-      .then(() => { loadOrders(); loadHistory(); });
+    fetch(`${API}/orders?symbol=${encodeURIComponent(symbolFilter)}`, { method: 'DELETE' }).then(refresh);
   };
 
-  const base     = tab === 'active' ? orders : history;
-  const total    = base.length;
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  const safePage  = Math.min(page, pageCount - 1);
-  const displayed = useMemo(
-    () => base.slice(safePage * pageSize, safePage * pageSize + pageSize),
-    [base, safePage, pageSize]
-  );
+  const switchTab = (t) => { setTab(t); setOffset(0); };
 
   return (
     <div className="card">
       <h2>Orders</h2>
 
       <div className="toolbar" style={{ marginBottom: 12 }}>
-        <button className={`tab${tab === 'active' ? ' active' : ''}`} onClick={() => { setTab('active'); setPage(0); }}>
-          Active ({orders.length})
+        <button className={`tab${tab === 'active' ? ' active' : ''}`} onClick={() => switchTab('active')}>
+          Active
         </button>
-        <button className={`tab${tab === 'history' ? ' active' : ''}`} onClick={() => { setTab('history'); setPage(0); }}>
-          History ({history.length})
+        <button className={`tab${tab === 'history' ? ' active' : ''}`} onClick={() => switchTab('history')}>
+          History
         </button>
         <input
           className="filter-input"
           placeholder="Filter by symbol…"
           value={symbolFilter}
-          onChange={e => setSymFilter(e.target.value)}
+          onChange={e => { setSymFilter(e.target.value.trim()); setOffset(0); }}
         />
         {tab === 'active' && (
           <button className="btn-danger" onClick={cancelAll}>Cancel All on Symbol</button>
         )}
-        <button className="btn-subtle" onClick={() => { loadOrders(); loadHistory(); }}>↺ Refresh</button>
-
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
-          <label className="toolbar-label">Page size</label>
-          <select
-            className="filter-select"
-            value={pageSize}
-            onChange={e => { setPageSize(Number(e.target.value)); setPage(0); }}
-          >
-            {PAGE_SIZES.map(n => <option key={n} value={n}>{n}</option>)}
-          </select>
-        </div>
+        <button className="btn-subtle" onClick={refresh}>↺ Refresh</button>
       </div>
 
-      {base.length === 0 ? (
+      <Pager
+        offset={offset}
+        limit={limit}
+        total={page.total}
+        onOffset={setOffset}
+        onLimit={n => { setLimit(n); setOffset(0); }}
+      />
+      <p className="pager-note">
+        Offset counts from the newest order (0 = newest). Only orders still held in memory are listed.
+      </p>
+
+      {page.total === 0 ? (
         <p className="empty">No orders</p>
       ) : (
-        <>
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>ID</th><th>ClOrdID</th><th>Client</th><th>Symbol</th>
-                <th>Side</th><th>Type</th><th>TIF</th><th>Status</th>
-                <th>Open</th><th>Filled</th><th>Limit Px</th>
-                {tab === 'active' && <th>Action</th>}
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>ID</th><th>ClOrdID</th><th>Client</th><th>Symbol</th>
+              <th>Side</th><th>Type</th><th>TIF</th><th>Status</th>
+              <th>Open</th><th>Filled</th><th>Limit Px</th>
+              {tab === 'active' && <th>Action</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {page.rows.map(o => (
+              <tr key={o.orderId}>
+                <td className="mono-time">{o.createTime ? fmtMs(new Date(o.createTime)) : '–'}</td>
+                <td>{o.orderId}</td>
+                <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{o.clOrdId}</td>
+                <td style={{ fontSize: 10, color: '#64748b' }}>{clientOf(o.sessionId)}</td>
+                <td><strong>{o.symbol}</strong></td>
+                <td><span className={`badge ${o.side === 'BUY' ? 'badge-green' : 'badge-red'}`}>{o.side}</span></td>
+                <td>{o.type}</td>
+                <td>{o.tif}</td>
+                <td><StatusBadge status={o.status} /></td>
+                <td>{o.openQty}</td>
+                <td>{o.filledQty}</td>
+                <td>{o.limitPrice ?? '–'}</td>
+                {tab === 'active' && (
+                  <td><button className="btn-danger" onClick={e => cancelOrder(e, o.orderId)}>Cancel</button></td>
+                )}
               </tr>
-            </thead>
-            <tbody>
-              {displayed.map(o => (
-                <tr key={o.orderId}>
-                  <td className="mono-time">{o.createTime ? fmtMs(new Date(o.createTime)) : '–'}</td>
-                  <td>{o.orderId}</td>
-                  <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{o.clOrdId}</td>
-                  <td style={{ fontSize: 10, color: '#64748b' }}>{clientOf(o.sessionId)}</td>
-                  <td><strong>{o.symbol}</strong></td>
-                  <td><span className={`badge ${o.side === 'BUY' ? 'badge-green' : 'badge-red'}`}>{o.side}</span></td>
-                  <td>{o.type}</td>
-                  <td>{o.tif}</td>
-                  <td><StatusBadge status={o.status} /></td>
-                  <td>{o.openQty}</td>
-                  <td>{o.filledQty}</td>
-                  <td>{o.limitPrice ?? '–'}</td>
-                  {tab === 'active' && (
-                    <td><button className="btn-danger" onClick={e => cancelOrder(e, o.orderId)}>Cancel</button></td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {/* Pagination controls */}
-          <div className="pagination">
-            <button className="btn-subtle" disabled={safePage === 0} onClick={() => setPage(0)}>«</button>
-            <button className="btn-subtle" disabled={safePage === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>‹</button>
-            <span className="page-info">Page {safePage + 1} / {pageCount} ({total} rows)</span>
-            <button className="btn-subtle" disabled={safePage >= pageCount - 1} onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))}>›</button>
-            <button className="btn-subtle" disabled={safePage >= pageCount - 1} onClick={() => setPage(pageCount - 1)}>»</button>
-          </div>
-        </>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   );

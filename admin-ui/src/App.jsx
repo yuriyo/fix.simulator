@@ -33,8 +33,7 @@ export default function App() {
   const [wsStatus, setWsStatus] = useState('disconnected');
 
   const [books, setBooks]             = useState({});   // symbol → { bids, asks }
-  const [trades, setTrades]           = useState([]);   // capped at 500
-  const [orderEvents, setOrderEvents] = useState([]);   // triggers refresh in child panels
+  const [orderEvents, setOrderEvents] = useState([]);   // triggers refresh in child panels (trades, orders, executions)
 
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
@@ -55,10 +54,6 @@ export default function App() {
         const msg = JSON.parse(e.data);
         if (msg.type === 'book_update') {
           setBooks(prev => ({ ...prev, [msg.symbol]: { bids: msg.bids, asks: msg.asks } }));
-        } else if (msg.type === 'trade') {
-          // msg.time is an ISO-8601 string from the server (Instant.toString())
-          const displayTime = msg.time ? fmtMs(new Date(msg.time)) : fmtMs(new Date());
-          setTrades(prev => [{ ...msg, displayTime }, ...prev].slice(0, 500));
         } else if (msg.type === 'order_event') {
           setOrderEvents(prev => [{ ...msg, _ts: Date.now() }, ...prev].slice(0, 500));
         }
@@ -75,17 +70,6 @@ export default function App() {
 
   useEffect(() => {
     connectWs();
-    // Load existing trade history so the Trades tab is populated immediately
-    fetch('/api/trades')
-      .then(r => r.json())
-      .then(data => {
-        const formatted = [...data].reverse().slice(0, 500).map(t => ({
-          ...t,
-          displayTime: t.time ? fmtMs(new Date(t.time)) : fmtMs(new Date()),
-        }));
-        setTrades(formatted);
-      })
-      .catch(() => {});
     return () => {
       clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
@@ -115,9 +99,9 @@ export default function App() {
       </nav>
 
       <div className="tab-content">
-        {tab === 0 && <DashboardPanel trades={trades} orderEvents={orderEvents} wsStatus={wsStatus} />}
+        {tab === 0 && <DashboardPanel orderEvents={orderEvents} wsStatus={wsStatus} />}
         {tab === 1 && <BookPanel books={books} />}
-        {tab === 2 && <TradesPanel trades={trades} />}
+        {tab === 2 && <TradesPanel orderEvents={orderEvents} />}
         {tab === 3 && <ExecutionsPanel orderEvents={orderEvents} />}
         {tab === 4 && <OrdersPanel orderEvents={orderEvents} />}
         {tab === 5 && <InstrumentsPanel />}

@@ -31,6 +31,12 @@ public class Order {
     private volatile OrderStatus status;
     private volatile boolean triggered;      // for STOP / STOP_LIMIT
 
+    /** Receives every status change. Set by the engine so it can keep lifetime counts. */
+    public interface StatusObserver {
+        void onChange(OrderStatus from, OrderStatus to);
+    }
+    private volatile StatusObserver observer;
+
     public Order(String sessionId, String clOrdId, String origClOrdId,
                  String symbol, OrderSide side, OrderType type, TimeInForce tif,
                  long qty, BigDecimal limitPrice, BigDecimal stopPrice) {
@@ -73,15 +79,27 @@ public class Order {
 
     // ---- mutable operations ----
 
+    public void setStatusObserver(StatusObserver observer) {
+        this.observer = observer;
+    }
+
     public void fill(long qty) {
         this.openQty   -= qty;
         this.filledQty += qty;
-        this.status     = (openQty == 0) ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED;
+        changeStatus((openQty == 0) ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED);
     }
 
     public void cancel() {
-        this.status = OrderStatus.CANCELLED;
+        changeStatus(OrderStatus.CANCELLED);
         this.openQty = 0;
+    }
+
+    /** Set the status and tell the observer about a real change. */
+    private void changeStatus(OrderStatus next) {
+        OrderStatus prev = this.status;
+        this.status = next;
+        StatusObserver o = this.observer;
+        if (o != null && prev != next) o.onChange(prev, next);
     }
 
     public void trigger() {
@@ -93,7 +111,7 @@ public class Order {
     }
 
     public void setStatus(OrderStatus status) {
-        this.status = status;
+        changeStatus(status);
     }
 
     @Override

@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
+import Pager, { useThrottledTick, usePersisted } from './Pager.jsx';
 
 const API = '/api';
 
@@ -20,53 +21,71 @@ function clientOf(sessionId) {
 }
 
 export default function ExecutionsPanel({ orderEvents }) {
-  const [all, setAll]             = useState([]);     // full list from server
-  const [symFilter, setSymFilter] = useState('');
-  const [cliFilter, setCliFilter] = useState('');
+  const [symbols, setSymbols]     = useState([]);
+  const [symFilter, setSymFilter] = usePersisted('fixsim.executions.symbol', '');
+  const [cliFilter, setCliFilter] = usePersisted('fixsim.executions.client', '');   // substring of the session id, applied by the server
+  const [offset, setOffset]       = usePersisted('fixsim.executions.offset', 0);
+  const [limit, setLimit]         = usePersisted('fixsim.executions.limit', 25);
+  const [page, setPage]           = useState({ total: 0, rows: [] });
+  const [reload, setReload]       = useState(0);
+  const tick = useThrottledTick(orderEvents);
 
-  const load = () =>
-    fetch(`${API}/executions`)
+  useEffect(() => {
+    fetch(`${API}/instruments`)
       .then(r => r.json())
-      .then(setAll)
+      .then(m => setSymbols(Object.keys(m).sort()))
       .catch(() => {});
+  }, []);
 
-  // Reload whenever an order event fires (new orders / fills)
-  useEffect(() => { load(); }, [orderEvents]);
-
-  // Derive dropdown options from the full list (conjunctive AND pre-applied to the OTHER filter)
-  const symbols  = useMemo(() => [...new Set(all.map(e => e.symbol))].sort(), [all]);
-  const clients  = useMemo(() => [...new Set(all.map(e => clientOf(e.sessionId)).filter(Boolean))].sort(), [all]);
-
-  // Apply both filters (AND)
-  const displayed = useMemo(() =>
-    all.filter(e =>
-      (!symFilter || e.symbol === symFilter) &&
-      (!cliFilter || clientOf(e.sessionId) === cliFilter)
-    ),
-    [all, symFilter, cliFilter]
-  );
+  useEffect(() => {
+    const qs = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+    if (symFilter) qs.set('symbol', symFilter);
+    if (cliFilter) qs.set('clientId', cliFilter);
+    fetch(`${API}/executions?${qs}`)
+      .then(r => r.json())
+      .then(p => {
+        if (!p || p.error || !Array.isArray(p.rows)) return;
+        setPage(p);
+        if (p.total > 0 && offset >= p.total) {
+          setOffset(Math.floor((p.total - 1) / limit) * limit);
+        }
+      })
+      .catch(() => {});
+  }, [symFilter, cliFilter, offset, limit, tick, reload]);
 
   return (
     <div className="card">
       <h2>Executions</h2>
       <div className="toolbar">
         <label className="toolbar-label">Symbol</label>
-        <select className="filter-select" value={symFilter} onChange={e => setSymFilter(e.target.value)}>
+        <select className="filter-select" value={symFilter} onChange={e => { setSymFilter(e.target.value); setOffset(0); }}>
           <option value="">All</option>
           {symbols.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
 
         <label className="toolbar-label">Client</label>
-        <select className="filter-select" value={cliFilter} onChange={e => setCliFilter(e.target.value)}>
-          <option value="">All</option>
-          {clients.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
+        <input
+          className="filter-input"
+          placeholder="Client contains…"
+          value={cliFilter}
+          onChange={e => { setCliFilter(e.target.value.trim()); setOffset(0); }}
+        />
 
-        <button className="btn-subtle" onClick={load}>↺ Refresh</button>
-        <span className="toolbar-count">{displayed.length} exec{displayed.length !== 1 ? 's' : ''}</span>
+        <button className="btn-subtle" onClick={() => setReload(r => r + 1)}>↺ Refresh</button>
       </div>
 
-      {displayed.length === 0 ? (
+      <Pager
+        offset={offset}
+        limit={limit}
+        total={page.total}
+        onOffset={setOffset}
+        onLimit={n => { setLimit(n); setOffset(0); }}
+      />
+      <p className="pager-note">
+        Offset counts from the newest execution (0 = newest). Only executions still held in memory are listed.
+      </p>
+
+      {page.total === 0 ? (
         <p className="empty">No executions</p>
       ) : (
         <table>
@@ -84,8 +103,8 @@ export default function ExecutionsPanel({ orderEvents }) {
             </tr>
           </thead>
           <tbody>
-            {displayed.map((e, i) => (
-              <tr key={i}>
+            {page.rows.map((e, i) => (
+              <tr key={`${e.execId}-${i}`}>
                 <td className="mono-time">{fmtTime(e.time)}</td>
                 <td style={{ fontFamily: 'monospace', fontSize: 10, color: '#475569' }}>{e.execId}</td>
                 <td><strong className="sym-label">{e.symbol}</strong></td>

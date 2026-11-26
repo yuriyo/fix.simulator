@@ -106,6 +106,11 @@ public class FIXMessageLog {
         }
     }
 
+    /** Messages recorded since start (inbound and outbound). Not limited by the retained window. */
+    public long totalRecorded() {
+        return seq.get();
+    }
+
     /**
      * Return all entries matching the given filters (all optional / blank = no filter).
      * Newest first.

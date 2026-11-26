@@ -176,7 +176,7 @@ const SYMBOL_COLORS = [
   '#67e8f9', '#f9a8d4', '#fdba74',
 ];
 
-export default function DashboardPanel({ trades, orderEvents, wsStatus }) {
+export default function DashboardPanel({ orderEvents, wsStatus }) {
   const [dash, setDash] = useState(null);
   const [uptime, setUptime] = useState('');
   const [refreshTs, setRefreshTs] = useState(null);
