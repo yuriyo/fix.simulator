@@ -334,7 +334,17 @@ public class MatchingEngine {
     }
 
     /** Find any order (active or retained history) by its internal server-assigned id. */
-    public Order findOrderById(long id) { return allOrders.get(id); }
+    public Order findOrderById(long id) {
+        Order o = allOrders.get(id);
+        if (o != null) return o;
+        // Admin book levels (set from the admin UI) are resting orders that are not in the registry,
+        // so they are found through the books that hold them.
+        for (OrderBook book : books.values()) {
+            Order found = book.findById(id);
+            if (found != null) return found;
+        }
+        return null;
+    }
 
     /** Trade log (one record per aggressor fill). Filterable by symbol. */
     public List<Map<String, Object>> getTradeLog(String symbol) {
