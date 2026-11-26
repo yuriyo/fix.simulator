@@ -67,6 +67,7 @@ public class Main {
         app.setEventBus(eventBus);
         app.setInstrumentStateManager(stateManager);
         app.setMessageLog(msgLog);
+        app.startMarketDataPublisher();   // sends BBO updates to market data subscribers every 100 ms
         MessageStoreFactory store  = new FileStoreFactory(settings);
         // FIX session logs are written on a background thread so session threads never wait on disk.
         AsyncLogFactory asyncLog   = new AsyncLogFactory(new FileLogFactory(settings));

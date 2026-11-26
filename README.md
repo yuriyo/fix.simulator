@@ -239,6 +239,7 @@ The admin server listens on `127.0.0.1` unless `ADMIN_BIND` is set. Keep it that
 | `G` | OrderCancelReplaceRequest | Change quantity or price of an order |
 | `S` | Quote | Single-symbol bid and ask quote |
 | `i` | MassQuote | Quotes for several symbols |
+| `V` | MarketDataRequest | Top of book (BBO) per symbol: snapshot (type 0), subscribe (type 1) or unsubscribe (type 2) |
 
 **Simulator to client (outbound):**
 
@@ -247,6 +248,11 @@ The admin server listens on `127.0.0.1` unless `ADMIN_BIND` is set. Keep it that
 | `8` | ExecutionReport | New order acknowledged, fill, cancel, replace or reject |
 | `9` | OrderCancelReject | A cancel or replace was refused |
 | `b` | QuoteAcknowledgement / MassQuoteAcknowledgement | Reply to a quote |
+| `W` | MarketDataSnapshotFullRefresh | Best bid and best offer for one symbol, with total quantity at each. Sent for a snapshot request and first on subscribe. |
+| `X` | MarketDataIncrementalRefresh | A subscribed symbol's best bid or offer changed. Checked about every 100 ms. A side that empties is sent as a Delete (279=2). |
+| `Y` | MarketDataRequestReject | The request was refused. Field 281 gives the reason: `0` unknown symbol, `4` unsupported subscription type, `5` only MarketDepth 1 (top of book) is supported, `6` only incremental updates (MDUpdateType 1), `8` only bid (0) and offer (1) entries. |
+
+**Top-of-book request example:** send a `V` with `262` (MDReqID), `263=1` (subscribe), `264=1` (top of book), `267` with entries `269=0` and `269=1` (optional, default is both sides), and `146` with `55=AAPL`. The simulator replies with a `W` for AAPL, then an `X` each time the best bid or offer changes.
 
 ### 7.2 Order types
 

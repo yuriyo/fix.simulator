@@ -122,10 +122,8 @@ require_docker() {
 }
 
 ensure_dev_image() {
-    if ! docker image inspect "$DEV_IMAGE" &>/dev/null; then
-        log_step "Building developer toolbox image $DEV_IMAGE"
-        docker build -t "$DEV_IMAGE" -f "$SCRIPT_DIR/Dockerfile.dev" "$SCRIPT_DIR"
-    fi
+    # Always run docker build: it reuses cached layers, and it picks up changes to Dockerfile.dev.
+    docker build -q -t "$DEV_IMAGE" -f "$SCRIPT_DIR/Dockerfile.dev" "$SCRIPT_DIR" >/dev/null
 }
 
 # Run a command in the toolbox container as the current user, with the repository mounted at /src.

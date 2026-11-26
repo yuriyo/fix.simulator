@@ -194,6 +194,23 @@ public class OrderBook {
         return asks.isEmpty() ? null : asks.firstKey();
     }
 
+    /** One price level: its price and total open quantity. */
+    public record BookLevel(BigDecimal price, long qty) {}
+
+    /**
+     * Best price level on one side with its total open quantity (top of book), or null if empty.
+     *
+     * @param bid true for the bid side, false for the offer side
+     */
+    public synchronized BookLevel bestLevel(boolean bid) {
+        TreeMap<BigDecimal, ArrayDeque<Order>> side = bid ? bids : asks;
+        if (side.isEmpty()) return null;
+        Map.Entry<BigDecimal, ArrayDeque<Order>> best = side.firstEntry();
+        long qty = 0;
+        for (Order o : best.getValue()) qty += o.getOpenQty();
+        return new BookLevel(best.getKey(), qty);
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     //  Admin / monitoring helpers
     // ──────────────────────────────────────────────────────────────────────

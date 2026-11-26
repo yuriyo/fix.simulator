@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import quickfix.*;
 import quickfix.field.MsgType;
+import quickfix.fix42.MarketDataRequest;
 import quickfix.fix42.MassQuote;
 import quickfix.fix42.NewOrderSingle;
 import quickfix.fix42.OrderCancelReplaceRequest;
@@ -44,6 +45,7 @@ public class FIXSimulatorApp implements Application {
     private final CancelHandler          cancelHandler;
     private final CancelReplaceHandler   cancelReplaceHandler;
     private final QuoteHandler           quoteHandler;
+    private final MarketDataHandler      marketDataHandler;
 
     // ── Admin (optional – injected via setters; null until wired) ────────────
     private ClientRegistry         clientRegistry;
@@ -90,6 +92,27 @@ public class FIXSimulatorApp implements Application {
         this.cancelHandler        = new CancelHandler(engine, sender);
         this.cancelReplaceHandler = new CancelReplaceHandler(engine, registry, sender);
         this.quoteHandler         = new QuoteHandler(engine, registry, sender);
+        this.marketDataHandler    = new MarketDataHandler(engine, sender);
+    }
+
+    /**
+     * Start the timer that sends incremental top-of-book updates to market data subscribers.
+     * Called once from {@code Main}; tests call {@link MarketDataHandler#publishChanges()} directly.
+     */
+    public void startMarketDataPublisher() {
+        java.util.concurrent.ScheduledExecutorService timer =
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "market-data-publisher");
+                    t.setDaemon(true);
+                    return t;
+                });
+        timer.scheduleAtFixedRate(() -> {
+            try {
+                marketDataHandler.publishChanges();
+            } catch (RuntimeException e) {
+                log.warn("Market data publish failed: {}", e.getMessage());
+            }
+        }, 100, 100, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -115,6 +138,7 @@ public class FIXSimulatorApp implements Application {
     @Override
     public void onLogout(SessionID sessionId) {
         log.info("Logout: {}", sessionId);
+        marketDataHandler.onSessionLogout(sessionId);
         if (clientRegistry != null) clientRegistry.onDisconnect(sessionId);
         if (eventBus != null)
             eventBus.publish(java.util.Map.of(
@@ -187,6 +211,7 @@ public class FIXSimulatorApp implements Application {
                 case MsgType.ORDER_CANCEL_REPLACE_REQUEST -> cancelReplaceHandler.handle((OrderCancelReplaceRequest) message, sessionId);
                 case MsgType.QUOTE                     -> quoteHandler.handleQuote((Quote)                    message, sessionId);
                 case MsgType.MASS_QUOTE               -> quoteHandler.handleMassQuote((MassQuote)             message, sessionId);
+                case MsgType.MARKET_DATA_REQUEST      -> marketDataHandler.handle((MarketDataRequest)        message, sessionId);
                 default -> {
                     log.warn("Unhandled message type: {}", msgType);
                     throw new UnsupportedMessageType();

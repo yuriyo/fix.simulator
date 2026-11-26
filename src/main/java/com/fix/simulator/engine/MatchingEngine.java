@@ -317,6 +317,22 @@ public class MatchingEngine {
     /** All registered symbols. */
     public Set<String> getSymbols() { return Collections.unmodifiableSet(books.keySet()); }
 
+    /**
+     * Best bid and offer for a symbol (top of book), or null if the symbol is not registered.
+     * Each side is read under the book lock, so the two sides are read at one point in time.
+     */
+    public TopOfBook getTopOfBook(String symbol) {
+        OrderBook book = books.get(symbol);
+        if (book == null) return null;
+        synchronized (book) {
+            OrderBook.BookLevel bid = book.bestLevel(true);
+            OrderBook.BookLevel ask = book.bestLevel(false);
+            return new TopOfBook(
+                    bid == null ? null : bid.price(), bid == null ? 0 : bid.qty(),
+                    ask == null ? null : ask.price(), ask == null ? 0 : ask.qty());
+        }
+    }
+
     /** Find any order (active or retained history) by its internal server-assigned id. */
     public Order findOrderById(long id) { return allOrders.get(id); }
 
