@@ -7,6 +7,9 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.math.BigDecimal;
 import java.util.*;
 
@@ -43,33 +46,6 @@ class ResourceDefectsTest {
      * trade, the way production writers do: under the list's monitor. The reader gets a window of
      * {@link #WINDOW_MS} to see whether the writer gets in while iteration is in progress.
      */
-    static class ConcurrentWriterList extends LinkedList<Map<String, Object>> {
-        boolean armed = true;
-        Thread writer;
-
-        @Override
-        public Iterator<Map<String, Object>> iterator() {
-            Iterator<Map<String, Object>> it = super.iterator();
-            return new Iterator<>() {
-                @Override public boolean hasNext() { return it.hasNext(); }
-                @Override public Map<String, Object> next() {
-                    Map<String, Object> m = it.next();
-                    if (armed) {
-                        armed = false;
-                        writer = new Thread(() -> {
-                            Map<String, Object> extra = new LinkedHashMap<>();
-                            extra.put("symbol", "MSFT");
-                            synchronized (ConcurrentWriterList.this) { ConcurrentWriterList.this.add(extra); }
-                        }, "concurrent-trade-writer");
-                        writer.start();
-                        try { writer.join(WINDOW_MS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-                    }
-                    return m;
-                }
-            };
-        }
-    }
-
     private static final long WINDOW_MS = 500;
 
     private void roundTrip(long i) {
@@ -88,16 +64,38 @@ class ResourceDefectsTest {
         void tradedSymbols_survivesConcurrentTradeDuringIteration() throws Exception {
             roundTrip(1);
             roundTrip(2);   // two trades so the iterator has a second step after the concurrent add
-            ConcurrentWriterList trap = new ConcurrentWriterList();
-            trap.addAll(engine.getTradeLog(null));
             Field f = MatchingEngine.class.getDeclaredField("tradeLog");
             f.setAccessible(true);
+            Collection<?> existing = (Collection<?>) f.get(engine);
+            AtomicReference<Thread> writer = new AtomicReference<>();
+            AtomicBoolean armed = new AtomicBoolean(true);
+            // Deque whose first iteration step starts a real trade on another thread, so the
+            // engine appends to the log while getTradedSymbols is still iterating it.
+            ConcurrentLinkedDeque<Object> trap = new ConcurrentLinkedDeque<>() {
+                @Override public Iterator<Object> iterator() {
+                    Iterator<Object> it = super.iterator();
+                    return new Iterator<>() {
+                        @Override public boolean hasNext() { return it.hasNext(); }
+                        @Override public Object next() {
+                            Object o = it.next();
+                            if (armed.compareAndSet(true, false)) {
+                                Thread t = new Thread(() -> roundTrip(99), "concurrent-trade-writer");
+                                writer.set(t);
+                                t.start();
+                                try { t.join(WINDOW_MS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                            }
+                            return o;
+                        }
+                    };
+                }
+            };
+            trap.addAll(existing);
             f.set(engine, trap);
 
             assertDoesNotThrow(() -> engine.getTradedSymbols(),
                     "getTradedSymbols must tolerate a concurrent trade append");   // actual: CME
-            assertNotNull(trap.writer, "writer thread should have started during iteration");
-            trap.writer.join(5_000);
+            assertNotNull(writer.get(), "writer thread should have started during iteration");
+            writer.get().join(5_000);
         }
 
         @Test

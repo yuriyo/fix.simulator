@@ -6,8 +6,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -42,8 +45,9 @@ public class MatchingEngine {
     /** Order register keyed by internalId. Terminal orders are evicted beyond ORDER_HISTORY_CAP. */
     private final ConcurrentHashMap<Long, Order> allOrders = new ConcurrentHashMap<>();
 
-    /** Insertion order of {@link #allOrders} keys. Guarded by its own monitor. */
-    private final ArrayDeque<Long> orderHistory = new ArrayDeque<>();
+    /** Insertion order of {@link #allOrders} keys. Lock-free; shared by every book, so it must never block. */
+    private final ConcurrentLinkedDeque<Long> orderHistory = new ConcurrentLinkedDeque<>();
+    private final AtomicInteger orderHistoryCount = new AtomicInteger();
 
     /**
      * Resting quote orders per {@code symbol|sessionId}, so a new quote can withdraw the previous one.
@@ -51,11 +55,19 @@ public class MatchingEngine {
      */
     private final ConcurrentHashMap<String, List<Order>> restingQuotes = new ConcurrentHashMap<>();
 
-    /** Trade log: one record per matched aggressor fill. Guarded by its own monitor. */
-    private final LinkedList<Map<String, Object>> tradeLog = new LinkedList<>();
+    /**
+     * Trade log: one raw record per matched aggressor fill. Lock-free, so appends made while
+     * holding a book monitor never wait on another symbol. Maps are built only when read.
+     */
+    private final ConcurrentLinkedDeque<Trade> tradeLog = new ConcurrentLinkedDeque<>();
+    private final AtomicInteger tradeCount = new AtomicInteger();
 
-    /** Execution log: every execution report. Guarded by its own monitor. */
-    private final LinkedList<Map<String, Object>> executionLog = new LinkedList<>();
+    /** Execution log: every execution report, stored as the immutable Execution. Lock-free like tradeLog. */
+    private final ConcurrentLinkedDeque<Execution> executionLog = new ConcurrentLinkedDeque<>();
+    private final AtomicInteger executionCount = new AtomicInteger();
+
+    /** One matched aggressor fill, kept raw so the book lock never builds maps or formats time. */
+    private record Trade(Instant time, String symbol, BigDecimal price, long qty, String aggressorSide) {}
 
     // ──────────────────────────────────────────────────────────────────────
     //  Admin wiring (optional setters – no constructor change keeps tests green)
@@ -110,9 +122,9 @@ public class MatchingEngine {
             return List.of(rej);
         }
 
-        synchronized (book) {
-            registerOrder(order);
+        registerOrder(order);   // independent of book state, so it stays outside the book lock
 
+        synchronized (book) {
             List<Execution> results = new ArrayList<>();
 
             // Ack the new order
@@ -293,32 +305,59 @@ public class MatchingEngine {
 
     /** Trade log (one record per aggressor fill). Filterable by symbol. */
     public List<Map<String, Object>> getTradeLog(String symbol) {
-        synchronized (tradeLog) {
-            if (symbol == null || symbol.isEmpty()) return new ArrayList<>(tradeLog);
-            return tradeLog.stream()
-                    .filter(t -> symbol.equals(t.get("symbol")))
-                    .collect(Collectors.toList());
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Trade t : tradeLog) {
+            if (symbol == null || symbol.isEmpty() || symbol.equals(t.symbol())) out.add(tradeToMap(t));
         }
+        return out;
     }
 
     /** Symbols that have at least one completed trade. */
     public Set<String> getTradedSymbols() {
         Set<String> s = new LinkedHashSet<>();
-        synchronized (tradeLog) {
-            for (Map<String, Object> t : tradeLog) s.add((String) t.get("symbol"));
-        }
+        for (Trade t : tradeLog) s.add(t.symbol());
         return Collections.unmodifiableSet(s);
     }
 
     /** Execution log – all execution reports. Filterable by symbol and clientId substring. */
     public List<Map<String, Object>> getExecutionLog(String symbol, String clientId) {
-        synchronized (executionLog) {
-            return executionLog.stream()
-                    .filter(e -> symbol == null || symbol.isEmpty()   || symbol.equals(e.get("symbol")))
-                    .filter(e -> clientId == null || clientId.isEmpty() ||
-                                 ((String) e.getOrDefault("sessionId", "")).contains(clientId))
-                    .collect(Collectors.toList());
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Execution e : executionLog) {
+            Order o = e.getOrder();
+            if (symbol != null && !symbol.isEmpty() && !symbol.equals(o.getSymbol())) continue;
+            if (clientId != null && !clientId.isEmpty()) {
+                String sid = o.getSessionId();
+                if (sid == null || !sid.contains(clientId)) continue;
+            }
+            out.add(executionToMap(e));
         }
+        return out;
+    }
+
+    private static Map<String, Object> tradeToMap(Trade t) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("time",         t.time().toString());
+        m.put("symbol",       t.symbol());
+        m.put("price",        t.price().toPlainString());
+        m.put("qty",          t.qty());
+        m.put("aggressorSide", t.aggressorSide());
+        return m;
+    }
+
+    private static Map<String, Object> executionToMap(Execution e) {
+        Order o = e.getOrder();
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("execId",    e.getExecId());
+        m.put("time",      e.getTime().toString());
+        m.put("symbol",    o.getSymbol());
+        m.put("execType",  e.getExecType().name());
+        m.put("side",      o.getSide() != null ? o.getSide().name() : null);
+        m.put("price",     e.getPrice() != null ? e.getPrice().toPlainString() : null);
+        m.put("qty",       e.getQty());
+        m.put("clOrdId",   o.getClOrdId());
+        m.put("sessionId", o.getSessionId());
+        m.put("orderId",   o.getInternalId());
+        return m;
     }
 
     /** All resting (active) orders across every symbol. */
@@ -461,18 +500,15 @@ public class MatchingEngine {
                      || e.getExecType() == Execution.ExecType.PARTIAL_FILL)) {
                 logExecution(e);
 
-                // Publish one trade event per aggressor fill (not per passive)
+                // One trade per aggressor fill (not per passive). Raw record only; no map is built here.
                 if (e.getOrder() == aggressor) {
-                    Map<String, Object> tradeMap = new LinkedHashMap<>();
-                    tradeMap.put("time",         e.getTime().toString());
-                    tradeMap.put("symbol",       symbol);
-                    tradeMap.put("price",        e.getPrice().toPlainString());
-                    tradeMap.put("qty",          e.getQty());
-                    tradeMap.put("aggressorSide", aggressor.getSide().name());
-                    appendTrade(tradeMap);
+                    Trade trade = new Trade(e.getTime(), symbol, e.getPrice(), e.getQty(),
+                            aggressor.getSide().name());
+                    appendTrade(trade);
 
-                    if (bus != null) {
-                        Map<String, Object> wsMsg = new LinkedHashMap<>(tradeMap);
+                    // Build the WebSocket message only when someone is listening.
+                    if (bus != null && bus.hasClients()) {
+                        Map<String, Object> wsMsg = tradeToMap(trade);
                         wsMsg.put("type", "trade");
                         bus.publish(wsMsg);
                     }
@@ -495,44 +531,47 @@ public class MatchingEngine {
         if (bus != null) bus.markBookDirty(symbol);
     }
 
-    private void appendTrade(Map<String, Object> trade) {
-        synchronized (tradeLog) {
-            tradeLog.addLast(trade);
-            while (tradeLog.size() > TRADE_LOG_CAP) tradeLog.removeFirst();
-        }
+    private void appendTrade(Trade trade) {
+        tradeLog.addLast(trade);
+        if (tradeCount.incrementAndGet() > TRADE_LOG_CAP) evictOldest(tradeLog, tradeCount, TRADE_LOG_CAP);
     }
 
     /** Append a single execution to the execution log. */
     private void logExecution(Execution e) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("execId",    e.getExecId());
-        m.put("time",      e.getTime().toString());
-        m.put("symbol",    e.getOrder().getSymbol());
-        m.put("execType",  e.getExecType().name());
-        m.put("side",      e.getOrder().getSide() != null ? e.getOrder().getSide().name() : null);
-        m.put("price",     e.getPrice() != null ? e.getPrice().toPlainString() : null);
-        m.put("qty",       e.getQty());
-        m.put("clOrdId",   e.getOrder().getClOrdId());
-        m.put("sessionId", e.getOrder().getSessionId());
-        m.put("orderId",   e.getOrder().getInternalId());
-        synchronized (executionLog) {
-            executionLog.addLast(m);
-            while (executionLog.size() > EXECUTION_LOG_CAP) executionLog.removeFirst();
+        executionLog.addLast(e);
+        if (executionCount.incrementAndGet() > EXECUTION_LOG_CAP) evictOldest(executionLog, executionCount, EXECUTION_LOG_CAP);
+    }
+
+    /** Drop the oldest entries until the deque is back within its cap. Lock-free. */
+    private static <T> void evictOldest(ConcurrentLinkedDeque<T> deque, AtomicInteger count, int cap) {
+        while (count.get() > cap) {
+            if (deque.pollFirst() != null) count.decrementAndGet();
+            else break;
         }
     }
 
-    /** Add an order to the register and evict the oldest terminal orders beyond the cap. */
+    /** Add an order to the register and evict the oldest terminal orders beyond the cap. Lock-free. */
     private void registerOrder(Order order) {
         allOrders.put(order.getInternalId(), order);
-        synchronized (orderHistory) {
-            orderHistory.addLast(order.getInternalId());
-            while (orderHistory.size() > ORDER_HISTORY_CAP) {
-                Long oldest = orderHistory.peekFirst();
-                Order candidate = allOrders.get(oldest);
-                if (candidate != null && !isTerminal(candidate)) break; // never evict live orders
-                orderHistory.pollFirst();
-                allOrders.remove(oldest);
+        orderHistory.addLast(order.getInternalId());
+        if (orderHistoryCount.incrementAndGet() > ORDER_HISTORY_CAP) evictOldestOrders();
+    }
+
+    /**
+     * Evict from the front while over the cap. A live order at the front is pushed back and
+     * eviction stops, so live orders are never dropped (same rule as before).
+     */
+    private void evictOldestOrders() {
+        while (orderHistoryCount.get() > ORDER_HISTORY_CAP) {
+            Long oldest = orderHistory.pollFirst();
+            if (oldest == null) break;
+            Order candidate = allOrders.get(oldest);
+            if (candidate != null && !isTerminal(candidate)) {
+                orderHistory.addFirst(oldest);   // keep it; it is still live
+                break;
             }
+            allOrders.remove(oldest);
+            orderHistoryCount.decrementAndGet();
         }
     }
 
@@ -575,7 +614,7 @@ public class MatchingEngine {
 
     private void publishOrderEvent(Order order) {
         EventBus bus = this.eventBus;
-        if (bus == null) return;
+        if (bus == null || !bus.hasClients()) return;   // nobody listening: skip building the map
         Map<String, Object> evt = new LinkedHashMap<>();
         evt.put("type",      "order_event");
         evt.put("orderId",   order.getInternalId());

@@ -1,5 +1,6 @@
 package com.fix.simulator;
 
+import com.fix.simulator.util.AsyncLogFactory;
 import com.fix.simulator.admin.AdminServer;
 import com.fix.simulator.admin.ClientRegistry;
 import com.fix.simulator.admin.EventBus;
@@ -67,7 +68,10 @@ public class Main {
         app.setInstrumentStateManager(stateManager);
         app.setMessageLog(msgLog);
         MessageStoreFactory store  = new FileStoreFactory(settings);
-        LogFactory logFactory      = new FileLogFactory(settings);
+        // FIX session logs are written on a background thread so session threads never wait on disk.
+        AsyncLogFactory asyncLog   = new AsyncLogFactory(new FileLogFactory(settings));
+        LogFactory logFactory      = asyncLog;
+        Runtime.getRuntime().addShutdownHook(new Thread(asyncLog::close, "fix-log-shutdown"));
         MessageFactory msgFactory  = new DefaultMessageFactory();
 
         // ── Build acceptor with dynamic session support ─────────────────────
