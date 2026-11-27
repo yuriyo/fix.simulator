@@ -123,7 +123,7 @@ function SymbolBook({ symbol, book, depth }) {
       {/* Level add/edit dialog */}
       {dialog && (
         <div className="confirm-overlay" onClick={() => !busy && setDialog(null)}>
-          <div className="confirm-box" onClick={e => e.stopPropagation()} style={{ minWidth: 320 }}>
+          <div className="confirm-box" onClick={e => e.stopPropagation()} style={{ width: 380, maxWidth: '92vw', boxSizing: 'border-box' }}>
             <p className="confirm-msg">
               {dialog.price ? 'Edit' : 'Add'} price level — <strong>{symbol}</strong>
             </p>
@@ -169,7 +169,7 @@ function SymbolBook({ symbol, book, depth }) {
                 />
               </label>
               {dialog.warn && (
-                <p style={{ color: '#fbbf24', fontSize: 12, margin: 0, background: '#1c1a10', padding: '6px 10px', borderRadius: 6 }}>
+                <p style={{ color: '#fbbf24', fontSize: 12, margin: 0, background: '#1c1a10', padding: '6px 10px', borderRadius: 6, overflowWrap: 'anywhere' }}>
                   ⚠ {dialog.warn}
                 </p>
               )}

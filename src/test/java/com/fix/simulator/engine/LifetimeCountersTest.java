@@ -138,6 +138,53 @@ class LifetimeCountersTest {
     }
 
     @Nested
+    @DisplayName("admin book levels")
+    class AdminLevels {
+
+        @Test
+        @DisplayName("a level set from the admin UI is an open order in the totals")
+        void levelCounts() {
+            engine.setAdminBookLevel(SYM, OrderSide.BUY, new BigDecimal("9.00"), 100);
+            MatchingEngine.LifetimeStats s = engine.getLifetimeStats();
+            assertEquals(1, s.orders());
+            assertEquals(1, s.open());
+            assertEquals(1L, engine.getLifetimeOrdersByStatus().get("NEW"));
+        }
+
+        @Test
+        @DisplayName("replacing a level counts the old order as cancelled")
+        void replaceCounts() {
+            engine.setAdminBookLevel(SYM, OrderSide.BUY, new BigDecimal("9.00"), 100);
+            engine.setAdminBookLevel(SYM, OrderSide.BUY, new BigDecimal("9.00"), 50);
+            MatchingEngine.LifetimeStats s = engine.getLifetimeStats();
+            assertEquals(2, s.orders());
+            assertEquals(1, s.open());
+            assertEquals(1, s.cancelled());
+        }
+
+        @Test
+        @DisplayName("removing a level (qty 0) leaves nothing open")
+        void removeCounts() {
+            engine.setAdminBookLevel(SYM, OrderSide.SELL, new BigDecimal("11.00"), 100);
+            engine.setAdminBookLevel(SYM, OrderSide.SELL, new BigDecimal("11.00"), 0);
+            MatchingEngine.LifetimeStats s = engine.getLifetimeStats();
+            assertEquals(0, s.open());
+            assertEquals(1, s.cancelled());
+        }
+
+        @Test
+        @DisplayName("cancelling an admin level from the Orders tab is counted")
+        void cancelCounts() {
+            engine.setAdminBookLevel(MSFT, OrderSide.BUY, new BigDecimal("9.00"), 100);
+            Order level = engine.getAllActiveOrders(MSFT).get(0);
+            engine.cancelOrder("ADMIN", level.getClOrdId(), "ADMIN-CXL", MSFT);
+            MatchingEngine.LifetimeStats s = engine.getLifetimeStats();
+            assertEquals(0, s.open());
+            assertEquals(1, s.cancelled());
+        }
+    }
+
+    @Nested
     @DisplayName("beyond the retained history cap")
     class BeyondRetention {
 

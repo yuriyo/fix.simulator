@@ -35,6 +35,10 @@ public class EventBus {
             .registerModule(new JavaTimeModule())
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
+    /** Keep-alive interval for WebSocket clients. Must be well under Jetty's 30 s idle timeout. */
+    private static final long HEARTBEAT_MS = 10_000;
+    private long lastHeartbeatMs = System.currentTimeMillis();
+
     /** Symbols whose book changed since the last tick. */
     private final Set<String> dirtyBooks = ConcurrentHashMap.newKeySet();
 
@@ -88,6 +92,15 @@ public class EventBus {
             return;
         }
 
+        // Jetty closes a WebSocket that has been silent for 30 s (Connection Idle Timeout).
+        // While the book is quiet, send a heartbeat every 10 s so the connection stays open.
+        long now = System.currentTimeMillis();
+        if (now - lastHeartbeatMs >= HEARTBEAT_MS && dirtyBooks.isEmpty() && pendingEvents.isEmpty()) {
+            lastHeartbeatMs = now;
+            sendToAll("[{\"type\":\"heartbeat\"}]");
+            return;
+        }
+
         List<Object> batch = new ArrayList<>();
 
         // All queued non-book events
@@ -113,14 +126,18 @@ public class EventBus {
         if (batch.isEmpty()) return;
 
         try {
-            String json = mapper.writeValueAsString(batch);
-            clients.removeIf(ctx -> {
-                try { ctx.send(json); return false; }
-                catch (Exception ex) { return true; }
-            });
+            sendToAll(mapper.writeValueAsString(batch));
         } catch (Exception ex) {
             log.warn("EventBus tick serialisation failed: {}", ex.getMessage());
         }
+    }
+
+    /** Send one text message to every client, dropping the ones that fail. */
+    private void sendToAll(String json) {
+        clients.removeIf(ctx -> {
+            try { ctx.send(json); return false; }
+            catch (Exception ex) { return true; }
+        });
     }
 
     // ── Misc ──────────────────────────────────────────────────────────────

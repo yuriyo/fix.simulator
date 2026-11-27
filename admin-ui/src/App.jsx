@@ -51,11 +51,16 @@ export default function App() {
 
     ws.onmessage = (e) => {
       try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'book_update') {
-          setBooks(prev => ({ ...prev, [msg.symbol]: { bids: msg.bids, asks: msg.asks } }));
-        } else if (msg.type === 'order_event') {
-          setOrderEvents(prev => [{ ...msg, _ts: Date.now() }, ...prev].slice(0, 500));
+        // The server sends a single event as an object, and a batch of changes (book updates,
+        // order events) as an array in one message. Handle both.
+        const data = JSON.parse(e.data);
+        const items = Array.isArray(data) ? data : [data];
+        for (const msg of items) {
+          if (msg.type === 'book_update') {
+            setBooks(prev => ({ ...prev, [msg.symbol]: { bids: msg.bids, asks: msg.asks } }));
+          } else if (msg.type === 'order_event') {
+            setOrderEvents(prev => [{ ...msg, _ts: Date.now() }, ...prev].slice(0, 500));
+          }
         }
       } catch (_) {}
     };

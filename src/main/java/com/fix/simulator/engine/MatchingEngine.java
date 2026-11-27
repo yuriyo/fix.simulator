@@ -775,7 +775,8 @@ public class MatchingEngine {
         OrderBook book = books.get(symbol);
         if (book == null) return;
         synchronized (book) {
-            book.setAdminLevel(side, price, qty);
+            Order level = book.setAdminLevel(side, price, qty, statusCounts::onChange);
+            if (level != null) statusCounts.onRegister(level.getStatus());   // counted like any other order
             publishBookUpdate(symbol, book);
         }
     }

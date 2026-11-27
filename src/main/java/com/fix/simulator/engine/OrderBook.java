@@ -266,16 +266,29 @@ public class OrderBook {
      * @return the inserted admin Order, or {@code null} if the level was removed
      */
     public synchronized Order setAdminLevel(OrderSide side, BigDecimal price, long qty) {
+        return setAdminLevel(side, price, qty, null);
+    }
+
+    /**
+     * As {@link #setAdminLevel(OrderSide, BigDecimal, long)}, and the new order reports its status
+     * changes to {@code observer} (so admin orders are counted in the lifetime totals).
+     * Orders removed by the replacement are cancelled, so their status changes are counted too.
+     */
+    public synchronized Order setAdminLevel(OrderSide side, BigDecimal price, long qty, Order.StatusObserver observer) {
         TreeMap<BigDecimal, ArrayDeque<Order>> sideMap = sideMap(side);
         ArrayDeque<Order> existing = sideMap.remove(price);
         if (existing != null) {
-            for (Order o : existing) deindex(o);
+            for (Order o : existing) {
+                deindex(o);
+                o.cancel();
+            }
         }
         if (qty <= 0) return null;
         Order adminOrder = new Order(
                 "ADMIN", "ADMIN-" + System.nanoTime(), null,
                 symbol, side, OrderType.LIMIT, TimeInForce.GTC,
                 qty, price, null);
+        adminOrder.setStatusObserver(observer);
         sideMap.computeIfAbsent(price, k -> new ArrayDeque<>()).addLast(adminOrder);
         index(adminOrder);
         return adminOrder;
