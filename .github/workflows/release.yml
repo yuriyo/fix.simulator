@@ -83,6 +83,8 @@ jobs:
           cid=$(docker create "fix-simulator:${v}")
           docker cp "${cid}:/app/fix-simulator.jar" "dist/fix-simulator-${v}.jar"
           docker rm "$cid" >/dev/null
+          tar -czf "dist/fix-simulator-${v}-config.tar.gz" config
+          cp release/DEPLOY.md dist/DEPLOY.md
           (cd dist && sha256sum * > SHA256SUMS)
 
       - name: Create the GitHub release
@@ -91,5 +93,5 @@ jobs:
         run: |
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --title "FIX simulator ${{ steps.version.outputs.version }}" \
-            --generate-notes \
+            --notes-file release/DEPLOY.md \
             --verify-tag
