@@ -72,18 +72,26 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      - name: Build the image (tests already ran in the test job)
-        run: SKIP_TESTS=true ./build.sh build --version "${{ steps.version.outputs.version }}"
+      - name: Log in to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
 
-      - name: Package the image and the jar
+      - name: Build and push the image to Docker Hub (tests already ran in the test job)
+        run: |
+          SKIP_TESTS=true IMAGE_PREFIX=tradeeze IMAGE_NAME=fixsimulator \
+            ./build.sh build-push --version "${{ steps.version.outputs.version }}" --registry docker.io
+
+      - name: Package the image tarball, the jar and the config
         run: |
           v="${{ steps.version.outputs.version }}"
           mkdir -p dist
-          docker save "fix-simulator:${v}" | gzip > "dist/fix-simulator-${v}.image.tar.gz"
-          cid=$(docker create "fix-simulator:${v}")
-          docker cp "${cid}:/app/fix-simulator.jar" "dist/fix-simulator-${v}.jar"
+          docker save "tradeeze/fixsimulator:${v}" | gzip > "dist/fixsimulator-${v}.image.tar.gz"
+          cid=$(docker create "tradeeze/fixsimulator:${v}")
+          docker cp "${cid}:/app/fix-simulator.jar" "dist/fixsimulator-${v}.jar"
           docker rm "$cid" >/dev/null
-          tar -czf "dist/fix-simulator-${v}-config.tar.gz" config
+          tar -czf "dist/fixsimulator-${v}-config.tar.gz" config
           cp release/DEPLOY.md dist/DEPLOY.md
           (cd dist && sha256sum * > SHA256SUMS)
 

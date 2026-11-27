@@ -6,9 +6,10 @@ This guide is for a release of the FIX Exchange Simulator. It covers loading the
 
 | File | What it is |
 |------|-----------|
-| `fix-simulator-<version>.image.tar.gz` | The Docker image, ready to load with `docker load` |
-| `fix-simulator-<version>.jar` | The server as one runnable jar (for reference; the image already contains it) |
-| `fix-simulator-<version>-config.tar.gz` | Default `server.cfg` and `instruments.yml`. Start from these. |
+| Docker Hub `tradeeze/fixsimulator:<version>` | The Docker image. Pull it with `docker pull`. |
+| `fixsimulator-<version>.image.tar.gz` | The same image as a file, for machines without Internet access. Load it with `docker load`. |
+| `fixsimulator-<version>.jar` | The server as one runnable jar (for reference; the image already contains it) |
+| `fixsimulator-<version>-config.tar.gz` | Default `server.cfg` and `instruments.yml`. Start from these. |
 | `DEPLOY.md` | This guide |
 | `SHA256SUMS` | Checksums of every file above |
 
@@ -25,19 +26,26 @@ sha256sum -c SHA256SUMS
 | `9876` | FIX (clients connect here) |
 | `8080` | Admin web UI and REST API |
 
-## 1. Load the image
+## 1. Get the image
+
+From Docker Hub (needs Internet access):
 
 ```bash
-docker load -i fix-simulator-<version>.image.tar.gz
-docker image ls fix-simulator
+docker pull tradeeze/fixsimulator:<version>
 ```
 
-The image is `fix-simulator:<version>`.
+Or, from the release file, on a machine without Internet access:
+
+```bash
+docker load -i fixsimulator-<version>.image.tar.gz
+```
+
+Both give the image `tradeeze/fixsimulator:<version>`. Use that name in the commands below.
 
 ## 2. Prepare the configuration
 
 ```bash
-tar -xzf fix-simulator-<version>-config.tar.gz     # creates ./config
+tar -xzf fixsimulator-<version>-config.tar.gz     # creates ./config
 mkdir -p fix-simulator && mv config fix-simulator/
 ```
 
@@ -57,7 +65,7 @@ docker run -d --name fix-simulator --restart unless-stopped \
   -v "$(pwd)/fix-simulator/config:/app/config" \
   -v fix-store:/app/store \
   -v fix-logs:/app/logs \
-  fix-simulator:<version>
+  tradeeze/fixsimulator:<version>
 ```
 
 - `--restart unless-stopped` starts the simulator again after a reboot.
@@ -145,12 +153,12 @@ docker run --rm -v fix-store:/from -v "$(pwd)":/to alpine tar czf /to/fix-store-
 
 ```bash
 docker stop fix-simulator && docker rm fix-simulator
-docker load -i fix-simulator-<new-version>.image.tar.gz
+docker pull tradeeze/fixsimulator:<new-version>
 docker run -d --name fix-simulator --restart unless-stopped \
   -p 9876:9876 -p 8080:8080 -e ADMIN_TOKEN="$ADMIN_TOKEN" \
   -v "$(pwd)/fix-simulator/config:/app/config" \
   -v fix-store:/app/store -v fix-logs:/app/logs \
-  fix-simulator:<new-version>
+  tradeeze/fixsimulator:<new-version>
 ```
 
 The volumes are kept, so sessions resume. Check that clients still use `FIX.4.2`.
