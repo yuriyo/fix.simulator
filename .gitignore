@@ -13,3 +13,6 @@ logs/
 
 # Local config overrides (keep config/ tracked but allow local copies)
 config/*.local.*
+
+# Personal Claude Code settings for this project
+.claude/settings.local.json
