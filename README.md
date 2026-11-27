@@ -213,6 +213,40 @@ Orders with a quantity off the lot size or a price off the tick size are rejecte
 
 Open **http://localhost:8080** (Docker) or the admin port you chose. The UI shows order books, orders, trades, executions and the FIX message log, and lets you cancel orders and change book levels.
 
+The tabs, with a screenshot of each:
+
+**Dashboard**: totals, order status, volume and trades by symbol, and the last trade prices.
+
+![Dashboard](docs/screenshots/dashboard.png)
+
+**Book**: the bids and asks for each symbol. Add a price level with **+ Level**.
+
+![Order book](docs/screenshots/book.png)
+
+**Trades**: the trade tape, newest first, with paging.
+
+![Trades](docs/screenshots/trades.png)
+
+**Executions**: every execution report, filtered by symbol and client.
+
+![Executions](docs/screenshots/executions.png)
+
+**Orders**: active and historical orders.
+
+![Orders](docs/screenshots/orders.png)
+
+**Instruments**: the state of each symbol (OPEN, HALT, QUOTES_ONLY), which you can change.
+
+![Instruments](docs/screenshots/instruments.png)
+
+**Clients**: FIX sessions, and the block and allow lists.
+
+![Clients](docs/screenshots/clients.png)
+
+**Messages**: the FIX message history, read from the session logs, with filters.
+
+![Messages](docs/screenshots/messages.png)
+
 The API is at `/api/...`. Reading data needs no token. Any change (POST, PUT, PATCH, DELETE) needs the header:
 
 ```bash
