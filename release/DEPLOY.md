@@ -134,7 +134,15 @@ docker run --rm -v fix-logs:/app/logs alpine sh -c 'rm -f /app/logs/*.messages.l
 docker start fix-simulator
 ```
 
-**Reset a session.** Stop the simulator, delete the session's files in the store (for example `FIX.4.2-EXCHANGE-CLIENT1.*`), and start it again. The client must reset too.
+**Reset a session.** The simulator keeps each session's sequence numbers in `fix-store`. A client setting of `ResetOnLogon=Y` does not reset the server. If the client gets `MsgSeqNum too low` at logon, the server still expects the old numbers. To reset a session, stop the simulator, delete that session's files in the store, and start it again:
+
+```bash
+docker stop fix-simulator
+docker run --rm -v fix-store:/app/store alpine sh -c 'rm -f /app/store/FIX.4.2-EXCHANGE-CLIENT1.*'
+docker start fix-simulator
+```
+
+Use the client's name in place of `CLIENT1`. Other sessions are not affected.
 
 **Back up the sessions:**
 
