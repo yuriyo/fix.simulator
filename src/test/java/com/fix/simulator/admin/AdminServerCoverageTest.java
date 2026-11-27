@@ -417,18 +417,18 @@ class AdminServerCoverageTest {
             assertTrue(get("/api/messages?clientId=CLIENT1").body().contains("\"total\":3"));
             assertTrue(get("/api/messages?symbol=MSFT").body().contains("\"total\":1"));
             assertTrue(get("/api/messages?text=ZZ").body().contains("\"total\":1"));
-            assertTrue(get("/api/messages?page=2&pageSize=2").body().contains("\"page\":2"));
-            assertTrue(get("/api/messages?page=99&pageSize=2").body().contains("\"page\":2"));   // clamped
-            assertTrue(get("/api/messages?pageSize=0").body().contains("\"pageSize\":1"));       // clamped up
-            assertTrue(get("/api/messages?pageSize=9999").body().contains("\"pageSize\":500"));  // clamped down
-            assertTrue(get("/api/messages?page=abc").body().contains("\"page\":1"));             // default
+            assertTrue(get("/api/messages?offset=2&limit=2").body().contains("\"offset\":2"));
+            assertTrue(get("/api/messages?offset=198&limit=2").body().contains("\"messages\":[]"));   // past the end
+            assertTrue(get("/api/messages?limit=0").body().contains("\"limit\":1"));       // clamped up
+            assertTrue(get("/api/messages?limit=9999").body().contains("\"limit\":500"));  // clamped down
+            assertTrue(get("/api/messages?offset=abc").body().contains("\"offset\":0"));       // default
         }
 
         @Test
-        void emptyLog_givesOnePageZeroCount() throws Exception {
+        void emptyLog_givesNoMessages() throws Exception {
             String body = get("/api/messages").body();
             assertTrue(body.contains("\"total\":0"));
-            assertTrue(body.contains("\"pageCount\":0"));
+            assertTrue(body.contains("\"messages\":[]"));
         }
     }
 
@@ -530,7 +530,7 @@ class AdminServerCoverageTest {
 
         @Test
         void parseInt_blankParameterUsesDefault() throws Exception {
-            assertTrue(get("/api/messages?page=%20").body().contains("\"page\":1"));
+            assertTrue(get("/api/messages?offset=%20").body().contains("\"offset\":0"));
         }
 
         @Test

@@ -333,25 +333,26 @@ public class AdminServer {
 
         // ── FIX Messages ──────────────────────────────────────────────
         app.get("/api/messages", ctx -> {
-            String compId  = ctx.queryParam("clientId");
-            String symbol  = ctx.queryParam("symbol");
-            String text    = ctx.queryParam("text");
-            int    page    = parseInt(ctx.queryParam("page"),     1);
-            int    pgSize  = parseInt(ctx.queryParam("pageSize"), 100);
-            pgSize = Math.min(Math.max(pgSize, 1), 500);
+            String compId = ctx.queryParam("clientId");
+            String symbol = ctx.queryParam("symbol");
+            String text   = ctx.queryParam("text");
+            int offset    = Math.max(0, parseInt(ctx.queryParam("offset"), 0));
+            int limit     = Math.min(Math.max(parseInt(ctx.queryParam("limit"), 100), 1), 500);
+
+            // Full history from the session log files when they exist; recent in-memory window otherwise.
+            if (fileMessages != null && fileMessages.hasFiles()) {
+                FileMessageReader.Result r = fileMessages.query(compId, symbol, text, offset, limit);
+                ctx.json(Map.of(
+                        "total",    r.total(),
+                        "offset",   offset,
+                        "limit",    limit,
+                        "messages", r.rows()));
+                return;
+            }
 
             List<FIXMessageLog.Entry> all = messageLog.getMessages(compId, symbol, text);
-            int total = all.size();
-            int pageCount = (int) Math.ceil((double) total / pgSize);
-            page = Math.max(1, Math.min(page, Math.max(1, pageCount)));
-
-            List<FIXMessageLog.Entry> page_data = all.stream()
-                    .skip((long)(page - 1) * pgSize)
-                    .limit(pgSize)
-                    .collect(Collectors.toList());
-
             List<Map<String, Object>> rows = new ArrayList<>();
-            for (FIXMessageLog.Entry e : page_data) {
+            for (FIXMessageLog.Entry e : all.stream().skip(offset).limit(limit).collect(Collectors.toList())) {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("id",        e.id);
                 m.put("sessionId", e.sessionId);
@@ -364,11 +365,10 @@ public class AdminServer {
                 rows.add(m);
             }
             ctx.json(Map.of(
-                    "total",     total,
-                    "page",      page,
-                    "pageSize",  pgSize,
-                    "pageCount", pageCount,
-                    "messages",  rows));
+                    "total",    all.size(),
+                    "offset",   offset,
+                    "limit",    limit,
+                    "messages", rows));
         });
         app.delete("/api/clients/{compId}", ctx -> {
             clientRegistry.forceDisconnect(ctx.pathParam("compId"));
@@ -535,6 +535,12 @@ public class AdminServer {
     private Map<String, String> error(String msg) {
         return Map.of("error", msg);
     }
+
+    /** Message history from the session log files; null means use the in-memory log only. */
+    private volatile FileMessageReader fileMessages;
+
+    /** Serve the Messages tab from the session log files in {@code dir} (full history). */
+    public void setFileMessageReader(FileMessageReader reader) { this.fileMessages = reader; }
 
     /** Thrown for invalid query parameters; mapped to HTTP 400. */
     static final class BadRequest extends RuntimeException {

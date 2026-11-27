@@ -116,30 +116,51 @@ function BarChart({ data = [], maxVal, label }) {
 }
 
 /** Mini sparkline (last N trade prices) */
-function Sparkline({ points = [], width = 260, height = 48, color = '#a5b4fc' }) {
-  if (points.length < 2) return <div className="empty" style={{height}}>Waiting for trades…</div>;
-  const minY = Math.min(...points);
-  const maxY = Math.max(...points);
-  const rangeY = maxY - minY || 1;
-  const pad = 4;
-  const w = width - pad * 2;
-  const h = height - pad * 2;
-  const pts = points.map((p, i) => {
-    const x = pad + (i / (points.length - 1)) * w;
-    const y = pad + h - ((p - minY) / rangeY) * h;
-    return `${x},${y}`;
-  }).join(' ');
+/** Trade prices of one symbol, oldest on the left, with a price axis and a time axis. */
+function PriceChart({ trades = [], symbol = '', width = 520, height = 200 }) {
+  const series = trades
+    .map(t => ({ p: parseFloat(t.price), time: t.time }))
+    .filter(x => !isNaN(x.p))
+    .reverse();                       // the endpoint returns newest first
+  if (series.length < 2) {
+    return <div className="empty" style={{ height }}>{symbol ? `No trades in ${symbol} yet` : 'Waiting for trades…'}</div>;
+  }
+  const prices = series.map(x => x.p);
+  let lo = Math.min(...prices), hi = Math.max(...prices);
+  const pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.001 || 1;
+  lo -= pad; hi += pad;
+  const ml = 58, mr = 14, mt = 10, mb = 28;
+  const w = width - ml - mr, h = height - mt - mb;
+  const x = i => ml + (i / (series.length - 1)) * w;
+  const y = p => mt + h - ((p - lo) / (hi - lo)) * h;
+  const ticks = [hi, (hi + lo) / 2, lo];
+  const fmtTime = iso => iso ? new Date(iso).toLocaleTimeString('en-GB', { hour12: false }) : '';
+  const last = series[series.length - 1];
+  const first = series[0];
+  const pts = series.map((s, i) => `${x(i)},${y(s.p)}`).join(' ');
 
   return (
-    <svg width={width} height={height} className="sparkline-svg">
-      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" />
-      {/* End dot */}
-      {(() => {
-        const lastX = pad + w;
-        const lastY = pad + h - ((points[points.length-1] - minY) / rangeY) * h;
-        return <circle cx={lastX} cy={lastY} r="3" fill={color} />;
-      })()}
-    </svg>
+    <div>
+      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>
+        <span><strong style={{ color: '#e2e8f0' }}>{symbol}</strong> · last {series.length} trades</span>
+        <span>last <strong style={{ color: '#e2e8f0' }}>{last.p.toFixed(2)}</strong></span>
+        <span>low {Math.min(...prices).toFixed(2)} · high {Math.max(...prices).toFixed(2)}</span>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto', display: 'block' }}
+           role="img" aria-label={`${symbol} trade prices`}>
+        {ticks.map((t, i) => (
+          <g key={i}>
+            <line x1={ml} x2={ml + w} y1={y(t)} y2={y(t)} stroke="#2d3148" strokeWidth="1" />
+            <text x={ml - 6} y={y(t) + 4} textAnchor="end" fontSize="11" fill="#64748b">{t.toFixed(2)}</text>
+          </g>
+        ))}
+        <text x={ml} y={height - 8} fontSize="11" fill="#64748b">{fmtTime(first.time)}</text>
+        <text x={ml + w} y={height - 8} fontSize="11" fill="#64748b" textAnchor="end">{fmtTime(last.time)}</text>
+        <polyline points={pts} fill="none" stroke="#a5b4fc" strokeWidth="1.5" strokeLinejoin="round" />
+        {series.map((sp, i) => <circle key={i} cx={x(i)} cy={y(sp.p)} r="2" fill="#a5b4fc" />)}
+        <circle cx={x(series.length - 1)} cy={y(last.p)} r="4" fill="#fbbf24" />
+      </svg>
+    </div>
   );
 }
 
@@ -195,6 +216,26 @@ export default function DashboardPanel({ orderEvents, wsStatus }) {
     return () => clearInterval(iv);
   }, [fetchDashboard]);
 
+  // Recent trades of the symbol shown in the price chart
+  const [chartSymbol, setChartSymbol] = useState('');
+  const [chartTrades, setChartTrades] = useState([]);
+
+  // Default to the symbol with the most trades
+  useEffect(() => {
+    if (chartSymbol || !dash) return;
+    const byTrades = Object.entries(dash.volumeBySymbol || {}).sort((a, b) => (b[1].trades || 0) - (a[1].trades || 0));
+    const symbols = Object.keys(dash.instrumentStates || {}).sort();
+    setChartSymbol(byTrades.length && byTrades[0][1].trades > 0 ? byTrades[0][0] : (symbols[0] || ''));
+  }, [dash, chartSymbol]);
+
+  useEffect(() => {
+    if (!chartSymbol) return;
+    fetch(`/api/trades?symbol=${encodeURIComponent(chartSymbol)}&limit=100`)
+      .then(r => r.json())
+      .then(d => setChartTrades(d.rows || []))
+      .catch(() => {});
+  }, [chartSymbol, refreshTs]);
+
   // Uptime clock
   useEffect(() => {
     const start = Date.now();
@@ -230,8 +271,6 @@ export default function DashboardPanel({ orderEvents, wsStatus }) {
     color: SYMBOL_COLORS[i % SYMBOL_COLORS.length],
   }));
 
-  // Sparkline from recent trades (price values)
-  const sparkPrices = (dash.recentTrades || []).map(t => parseFloat(t.price)).filter(p => !isNaN(p));
 
   const symbolCount = Object.keys(dash.instrumentStates || {}).length;
 
@@ -309,8 +348,14 @@ export default function DashboardPanel({ orderEvents, wsStatus }) {
       {/* ── Sparkline + Instruments ──────────── */}
       <div className="dash-bottom-row">
         <div className="card" style={{flex: 2}}>
-          <h2>Recent Trade Prices</h2>
-          <Sparkline points={sparkPrices} width={520} height={80} />
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+            <h2 style={{ margin: 0 }}>Trade Prices</h2>
+            <select className="filter-select" value={chartSymbol} aria-label="Instrument for the price chart"
+                    onChange={e => { setChartSymbol(e.target.value); setChartTrades([]); }}>
+              {Object.keys(dash.instrumentStates || {}).sort().map(sym => <option key={sym} value={sym}>{sym}</option>)}
+            </select>
+          </div>
+          <PriceChart trades={chartTrades} symbol={chartSymbol} width={520} height={200} />
         </div>
         <div className="card" style={{flex: 1}}>
           <h2>Instrument Status</h2>

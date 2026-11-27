@@ -84,6 +84,9 @@ public class Main {
 
         int adminPort = Integer.parseInt(System.getProperty("admin.port", "8080"));
         AdminServer adminServer = new AdminServer(engine, stateManager, clientReg, eventBus, msgLog, adminPort);
+        // Messages tab: full history from the session logs (FileLogPath in server.cfg, default "logs").
+        adminServer.setFileMessageReader(new com.fix.simulator.admin.FileMessageReader(
+                java.nio.file.Path.of(System.getProperty("fix.logdir", "logs"))));
         adminServer.start();
 
         int port = getPort(settings);

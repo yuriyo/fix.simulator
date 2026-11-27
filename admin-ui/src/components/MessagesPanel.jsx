@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fmtMs } from '../App.jsx';
+import Pager, { usePersisted } from './Pager.jsx';
 
 const API = '/api';
 
@@ -47,17 +48,14 @@ function setParams(clientId, symbol) {
   window.history.replaceState({}, '', `${window.location.pathname}?${p.toString()}`);
 }
 
-const PAGE_SIZES = [25, 50, 100];
-
 export default function MessagesPanel({ onBack }) {
   const init = getParams();
   const [clientId, setClientId] = useState(init.clientId);
   const [symbol,   setSymbol]   = useState(init.symbol);
   const [text,     setText]     = useState('');
-  const [data,     setData]     = useState({ total: 0, page: 1, pageSize: 50, pageCount: 0, messages: [] });
-  const [pageSize, setPageSize] = useState(50);
-  const [page,     setPage]     = useState(1);
-  const [pageInput, setPageInput] = useState(''); // controlled input for direct page nav
+  const [data,     setData]     = useState({ total: 0, messages: [] });
+  const [offset,   setOffset]   = usePersisted('fixsim.messages.offset', 0);
+  const [limit,    setLimit]    = usePersisted('fixsim.messages.limit', 100);
   const [expanded, setExpanded] = useState(null); // message id that is expanded
   const [loading,  setLoading]  = useState(false);
 
@@ -77,50 +75,37 @@ export default function MessagesPanel({ onBack }) {
     }).catch(() => {});
   }, []);
 
-  const fetchPage = useCallback((cid, sym, txt, pg, ps) => {
+  const fetchPage = useCallback((cid, sym, txt, off, lim) => {
     setLoading(true);
     const q = new URLSearchParams();
     if (cid) q.set('clientId', cid);
     if (sym) q.set('symbol',   sym);
     if (txt) q.set('text',     txt);
-    q.set('page', pg);
-    q.set('pageSize', ps);
+    q.set('offset', off);
+    q.set('limit', lim);
     fetch(`${API}/messages?${q}`)
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
 
-  // (Re-)fetch whenever filters or page/size change
+  // (Re-)fetch whenever filters, offset or limit change
   useEffect(() => {
     setParams(clientId, symbol);
-    fetchPage(clientId, symbol, text, page, pageSize);
-  }, [clientId, symbol, text, page, pageSize, fetchPage]);
+    fetchPage(clientId, symbol, text, offset, limit);
+  }, [clientId, symbol, text, offset, limit, fetchPage]);
 
+  // A filter change starts again from the newest message
   const applyFilter = () => {
-    setPage(1);
+    setOffset(0);
     setExpanded(null);
     setParams(clientId, symbol);
-    fetchPage(clientId, symbol, text, 1, pageSize);
-  };
-
-  const handlePageSize = (ps) => {
-    setPageSize(ps);
-    setPage(1);
-    setExpanded(null);
-  };
-
-  const handlePageInputCommit = () => {
-    const n = parseInt(pageInput, 10);
-    if (Number.isInteger(n) && n >= 1 && n <= data.pageCount) {
-      setPage(n);
-    }
-    setPageInput('');
+    fetchPage(clientId, symbol, text, 0, limit);
   };
 
   const toggleExpand = (id) => setExpanded(prev => prev === id ? null : id);
 
-  const { messages, total, pageCount } = data;
+  const { messages, total } = data;
 
   return (
     <div className="card">
@@ -136,13 +121,13 @@ export default function MessagesPanel({ onBack }) {
       {/* Filters */}
       <div className="toolbar" style={{ marginBottom: 8 }}>
         <span className="toolbar-label">Client</span>
-        <select className="filter-select" value={clientId} onChange={e => { setClientId(e.target.value); setPage(1); }}>
+        <select className="filter-select" value={clientId} onChange={e => { setClientId(e.target.value); setOffset(0); }}>
           <option value="">All clients</option>
           {clientIds.map(id => <option key={id} value={id}>{id}</option>)}
         </select>
 
         <span className="toolbar-label">Symbol</span>
-        <select className="filter-select" value={symbol} onChange={e => { setSymbol(e.target.value); setPage(1); }}>
+        <select className="filter-select" value={symbol} onChange={e => { setSymbol(e.target.value); setOffset(0); }}>
           <option value="">All symbols</option>
           {symbols.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
@@ -152,7 +137,7 @@ export default function MessagesPanel({ onBack }) {
           className="filter-input"
           placeholder="Search tag values…"
           value={text}
-          onChange={e => { setText(e.target.value); setPage(1); }}
+          onChange={e => { setText(e.target.value); setOffset(0); }}
           style={{ minWidth: 180 }}
         />
 
@@ -160,6 +145,14 @@ export default function MessagesPanel({ onBack }) {
 
         <span className="toolbar-count">{total} messages</span>
       </div>
+
+      <Pager
+        offset={offset}
+        limit={limit}
+        total={total}
+        onOffset={setOffset}
+        onLimit={n => { setLimit(n); setOffset(0); }}
+      />
 
       {/* Table */}
       {messages.length === 0
@@ -179,7 +172,7 @@ export default function MessagesPanel({ onBack }) {
             <tbody>
               {messages.map((msg, idx) => {
                 const isExp = expanded === msg.id;
-                const rowNum = (page - 1) * pageSize + idx + 1;
+                const rowNum = offset + idx + 1;
                 return [
                   <tr key={msg.id} className={`msg-row${isExp ? ' msg-row-active' : ''}`}
                       onClick={() => toggleExpand(msg.id)} style={{ cursor: 'pointer' }}>
@@ -224,35 +217,6 @@ export default function MessagesPanel({ onBack }) {
           </table>
         )}
 
-      {/* Pagination */}
-      {pageCount > 1 && (
-        <div className="pagination">
-          <button className="btn-subtle" onClick={() => setPage(1)}        disabled={page <= 1}>«</button>
-          <button className="btn-subtle" onClick={() => setPage(p => p-1)} disabled={page <= 1}>‹</button>
-          <span className="page-info">Page</span>
-          <input
-            type="number"
-            min="1"
-            max={pageCount}
-            value={pageInput !== '' ? pageInput : page}
-            onChange={e => setPageInput(e.target.value)}
-            onBlur={handlePageInputCommit}
-            onKeyDown={e => { if (e.key === 'Enter') { handlePageInputCommit(); e.target.blur(); } }}
-            style={{
-              width: 52, background: '#0f1117', border: '1px solid #2d3148',
-              color: '#e2e8f0', borderRadius: 5, padding: '3px 6px',
-              fontSize: 12, textAlign: 'center',
-            }}
-          />
-          <span className="page-info">/ {pageCount} ({total} rows)</span>
-          <button className="btn-subtle" onClick={() => setPage(p => p+1)} disabled={page >= pageCount}>›</button>
-          <button className="btn-subtle" onClick={() => setPage(pageCount)} disabled={page >= pageCount}>»</button>
-          <select className="filter-select" value={pageSize}
-                  onChange={e => handlePageSize(Number(e.target.value))}>
-            {PAGE_SIZES.map(ps => <option key={ps} value={ps}>{ps} / page</option>)}
-          </select>
-        </div>
-      )}
     </div>
   );
 }
