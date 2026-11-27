@@ -2,8 +2,11 @@
 #
 # Example: git tag simulator-r1.2.3 && git push origin simulator-r1.2.3
 #
-# The tag must point to a commit that is on main. The build runs the tests inside the
-# Docker image build (Dockerfile). The release holds the image as a tarball and the fat jar.
+# The tag must point to a commit that is on main. Two jobs run in order:
+#   1. test    checks the tag and the branch, then runs the full test suite (build.sh test).
+#              The JaCoCo and Surefire reports are kept as an artifact.
+#   2. release runs only when the tests pass. It builds the image without running the tests
+#              again, and publishes the image tarball, the jar and a checksum file.
 name: Release simulator
 
 on:
@@ -15,7 +18,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  test:
     runs-on: ubuntu-latest
     steps:
       - name: Check the tag name
@@ -40,11 +43,39 @@ jobs:
             exit 1
           fi
 
-      - name: Build the image (compiles and runs the tests)
-        run: ./build.sh build --version "${{ steps.version.outputs.version }}"
+      - name: Run the tests
+        run: ./build.sh test
+
+      - name: Keep the test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-test-reports
+          path: |
+            target/site/jacoco/
+            target/surefire-reports/
+          if-no-files-found: ignore
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the tag name
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^simulator-r([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Tag '$tag' does not match simulator-rN.M.L" >&2
+            exit 1
+          fi
+          echo "version=${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+
+      - name: Build the image (tests already ran in the test job)
+        run: SKIP_TESTS=true ./build.sh build --version "${{ steps.version.outputs.version }}"
 
       - name: Package the image and the jar
-        id: package
         run: |
           v="${{ steps.version.outputs.version }}"
           mkdir -p dist
