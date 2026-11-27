@@ -7,7 +7,6 @@ This guide is for a release of the FIX Exchange Simulator. It covers loading the
 | File | What it is |
 |------|-----------|
 | Docker Hub `tradeeze/fixsimulator:<version>` | The Docker image. Pull it with `docker pull`. |
-| `fixsimulator-<version>.image.tar.gz` | The same image as a file, for machines without Internet access. Load it with `docker load`. |
 | `fixsimulator-<version>.jar` | The server as one runnable jar (for reference; the image already contains it) |
 | `fixsimulator-<version>-config.tar.gz` | Default `server.cfg` and `instruments.yml`. Start from these. |
 | `DEPLOY.md` | This guide |
@@ -34,13 +33,7 @@ From Docker Hub (needs Internet access):
 docker pull tradeeze/fixsimulator:<version>
 ```
 
-Or, from the release file, on a machine without Internet access:
-
-```bash
-docker load -i fixsimulator-<version>.image.tar.gz
-```
-
-Both give the image `tradeeze/fixsimulator:<version>`. Use that name in the commands below.
+The image is `tradeeze/fixsimulator:<version>`. Use that name in the commands below. The image is built for `linux/amd64`. On an Apple Silicon Mac, add `--platform linux/amd64` to `docker pull` and `docker run`.
 
 ## 2. Prepare the configuration
 

@@ -6,7 +6,7 @@
 #   1. test    checks the tag and the branch, then runs the full test suite (build.sh test).
 #              The JaCoCo and Surefire reports are kept as an artifact.
 #   2. release runs only when the tests pass. It builds the image without running the tests
-#              again, and publishes the image tarball, the jar and a checksum file.
+#              again, and publishes the jar, the config, the guide and a checksum file. The image is pushed to Docker Hub.
 name: Release simulator
 
 on:
@@ -83,11 +83,10 @@ jobs:
           SKIP_TESTS=true IMAGE_PREFIX=tradeeze IMAGE_NAME=fixsimulator \
             ./build.sh build-push --version "${{ steps.version.outputs.version }}" --registry docker.io
 
-      - name: Package the image tarball, the jar and the config
+      - name: Package the jar and the config
         run: |
           v="${{ steps.version.outputs.version }}"
           mkdir -p dist
-          docker save "tradeeze/fixsimulator:${v}" | gzip > "dist/fixsimulator-${v}.image.tar.gz"
           cid=$(docker create "tradeeze/fixsimulator:${v}")
           docker cp "${cid}:/app/fix-simulator.jar" "dist/fixsimulator-${v}.jar"
           docker rm "$cid" >/dev/null
