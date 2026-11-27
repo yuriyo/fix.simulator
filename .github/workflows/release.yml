@@ -1,0 +1,64 @@
+# Release the FIX simulator when a tag named simulator-rN.M.L is pushed to main.
+#
+# Example: git tag simulator-r1.2.3 && git push origin simulator-r1.2.3
+#
+# The tag must point to a commit that is on main. The build runs the tests inside the
+# Docker image build (Dockerfile). The release holds the image as a tarball and the fat jar.
+name: Release simulator
+
+on:
+  push:
+    tags:
+      - 'simulator-r*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the tag name
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^simulator-r([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Tag '$tag' does not match simulator-rN.M.L" >&2
+            exit 1
+          fi
+          echo "version=${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check that the tag is on main
+        run: |
+          git fetch origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Tag ${GITHUB_REF_NAME} is not on main; no release." >&2
+            exit 1
+          fi
+
+      - name: Build the image (compiles and runs the tests)
+        run: ./build.sh build --version "${{ steps.version.outputs.version }}"
+
+      - name: Package the image and the jar
+        id: package
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+          docker save "fix-simulator:${v}" | gzip > "dist/fix-simulator-${v}.image.tar.gz"
+          cid=$(docker create "fix-simulator:${v}")
+          docker cp "${cid}:/app/fix-simulator.jar" "dist/fix-simulator-${v}.jar"
+          docker rm "$cid" >/dev/null
+          (cd dist && sha256sum * > SHA256SUMS)
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "FIX simulator ${{ steps.version.outputs.version }}" \
+            --generate-notes \
+            --verify-tag
